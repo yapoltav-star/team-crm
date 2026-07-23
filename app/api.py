@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.db import get_session
+from app.models import Employee, Project, Task
+from app.schemas import (
+    BoardOut,
+    EmployeeIn,
+    EmployeeOut,
+    ProjectIn,
+    ProjectOut,
+    TaskIn,
+    TaskOut,
+    TaskPatch,
+)
+
+router = APIRouter(prefix="/api")
+
+
+def _task_out(task: Task) -> TaskOut:
+    return TaskOut(
+        id=task.id,
+        title=task.title,
+        description=task.description or "",
+        project_id=task.project_id,
+        assignee_id=task.assignee_id,
+        status=task.status,
+        kind=task.kind,
+        weekdays=task.weekdays or "",
+        notify_time=task.notify_time,
+        active=task.active,
+        position=task.position,
+        assignee_name=task.assignee.name if task.assignee else None,
+        project_name=task.project.name if task.project else None,
+    )
+
+
+@router.get("/board", response_model=BoardOut)
+async def board(session: AsyncSession = Depends(get_session)) -> BoardOut:
+    projects = (
+        await session.scalars(select(Project).where(Project.active.is_(True)).order_by(Project.id))
+    ).all()
+    employees = (
+        await session.scalars(
+            select(Employee).where(Employee.active.is_(True)).order_by(Employee.name)
+        )
+    ).all()
+    tasks = (
+        await session.scalars(
+            select(Task)
+            .where(Task.active.is_(True))
+            .options(selectinload(Task.assignee), selectinload(Task.project))
+            .order_by(Task.position, Task.id)
+        )
+    ).all()
+    return BoardOut(
+        projects=[ProjectOut.model_validate(p) for p in projects],
+        employees=[EmployeeOut.model_validate(e) for e in employees],
+        tasks=[_task_out(t) for t in tasks],
+    )
+
+
+@router.post("/projects", response_model=ProjectOut)
+async def create_project(body: ProjectIn, session: AsyncSession = Depends(get_session)) -> ProjectOut:
+    project = Project(name=body.name, color=body.color)
+    session.add(project)
+    await session.commit()
+    await session.refresh(project)
+    return ProjectOut.model_validate(project)
+
+
+@router.post("/employees", response_model=EmployeeOut)
+async def create_employee(
+    body: EmployeeIn, session: AsyncSession = Depends(get_session)
+) -> EmployeeOut:
+    existing = await session.scalar(select(Employee).where(Employee.telegram_id == body.telegram_id))
+    if existing:
+        existing.name = body.name
+        existing.role = body.role
+        existing.active = True
+        await session.commit()
+        await session.refresh(existing)
+        return EmployeeOut.model_validate(existing)
+    emp = Employee(telegram_id=body.telegram_id, name=body.name, role=body.role)
+    session.add(emp)
+    await session.commit()
+    await session.refresh(emp)
+    return EmployeeOut.model_validate(emp)
+
+
+@router.post("/tasks", response_model=TaskOut)
+async def create_task(body: TaskIn, session: AsyncSession = Depends(get_session)) -> TaskOut:
+    task = Task(
+        title=body.title,
+        description=body.description,
+        project_id=body.project_id,
+        assignee_id=body.assignee_id,
+        status=body.status,
+        kind=body.kind,
+        weekdays=body.weekdays,
+        notify_time=body.notify_time,
+        created_at=datetime.utcnow(),
+    )
+    session.add(task)
+    await session.commit()
+    task = (
+        await session.scalars(
+            select(Task)
+            .where(Task.id == task.id)
+            .options(selectinload(Task.assignee), selectinload(Task.project))
+        )
+    ).one()
+    return _task_out(task)
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskOut)
+async def patch_task(
+    task_id: int, body: TaskPatch, session: AsyncSession = Depends(get_session)
+) -> TaskOut:
+    task = await session.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    data = body.model_dump(exclude_unset=True)
+    for key, value in data.items():
+        setattr(task, key, value)
+    await session.commit()
+    task = (
+        await session.scalars(
+            select(Task)
+            .where(Task.id == task_id)
+            .options(selectinload(Task.assignee), selectinload(Task.project))
+        )
+    ).one()
+    return _task_out(task)
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    task = await session.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    task.active = False
+    await session.commit()
+    return {"ok": True}

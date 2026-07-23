@@ -1,0 +1,1 @@
+"""Team CRM application package."""

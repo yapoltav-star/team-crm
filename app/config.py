@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from zoneinfo import ZoneInfo
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
+    owner_telegram_id: int = Field(default=0, alias="OWNER_TELEGRAM_ID")
+    tz_name: str = Field(default="Europe/Moscow", alias="TZ")
+    escalate_time: str = Field(default="20:00", alias="ESCALATE_TIME")
+    telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")
+    database_url: str = Field(default="", alias="DATABASE_URL")
+    web_password: str = Field(default="", alias="WEB_PASSWORD")
+
+    @field_validator("telegram_proxy", "database_url", "web_password", mode="before")
+    @classmethod
+    def empty_to_none_or_empty(cls, value: object) -> object:
+        if value is None:
+            return ""
+        return value
+
+    @property
+    def tz(self) -> ZoneInfo:
+        return ZoneInfo(self.tz_name)
+
+    @property
+    def sqlalchemy_url(self) -> str:
+        url = (self.database_url or "").strip()
+        if not url:
+            return "sqlite+aiosqlite:///./data/crm.db"
+        # Railway sometimes gives postgres://
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
+
+    @property
+    def bot_enabled(self) -> bool:
+        return bool(self.telegram_bot_token and self.owner_telegram_id)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
