@@ -625,7 +625,8 @@ def build_dispatcher(
                 if action == "help":
                     await wait.edit_text(help_common)
                     return
-                await wait.edit_text(str(intent.get("reply") or help_common))        except Exception as exc:  # noqa: BLE001
+                await wait.edit_text(str(intent.get("reply") or help_common))
+        except Exception as exc:  # noqa: BLE001
             logger.exception("nlp failed")
             await wait.edit_text(f"Не смог разобрать: {exc}")
 
