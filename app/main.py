@@ -6,8 +6,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import router as api_router
@@ -69,14 +69,14 @@ async def simple_password(request: Request, call_next):
     if settings.web_password and request.url.path.startswith("/api"):
         pwd = request.headers.get("x-crm-password") or request.query_params.get("password")
         if pwd != settings.web_password:
-            raise HTTPException(401, "Unauthorized")
+            # HTTPException in middleware becomes 500 — return Response explicitly
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
 
 @app.get("/health")
 async def health() -> dict:
-    # deploy marker — if Railway still shows old connector crash, this build never landed
-    return {"ok": True, "build": "session-fix-2026-07-24"}
+    return {"ok": True, "build": "auth-fix-2026-07-24"}
 
 
 @app.get("/")

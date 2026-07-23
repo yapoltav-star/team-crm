@@ -21,10 +21,14 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # мягкая миграция для уже существующей БД на Railway
-        try:
-            await conn.execute(text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by_id INTEGER"))
-        except Exception:
-            pass
+        for stmt in (
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by_id INTEGER",
+            "ALTER TABLE employees ALTER COLUMN telegram_id TYPE BIGINT",
+        ):
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
