@@ -42,6 +42,7 @@ class ProjectOut(BaseModel):
 class TaskIn(BaseModel):
     title: str
     description: str = ""
+    articles: str = ""
     project_id: int | None = None
     assignee_id: int | None = None
     created_by_id: int | None = None
@@ -55,6 +56,7 @@ class TaskIn(BaseModel):
 class TaskPatch(BaseModel):
     title: str | None = None
     description: str | None = None
+    articles: str | None = None
     project_id: int | None = None
     assignee_id: int | None = None
     status: str | None = None
@@ -69,6 +71,7 @@ class TaskOut(BaseModel):
     id: int
     title: str
     description: str
+    articles: str = ""
     project_id: int | None
     assignee_id: int | None
     created_by_id: int | None = None

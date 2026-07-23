@@ -33,6 +33,7 @@ def _task_out(task: Task, *, notified: bool | None = None, notify_error: str | N
         id=task.id,
         title=task.title,
         description=task.description or "",
+        articles=task.articles or "",
         project_id=task.project_id,
         assignee_id=task.assignee_id,
         created_by_id=task.created_by_id,
@@ -154,6 +155,7 @@ async def create_task(
     task = Task(
         title=body.title,
         description=body.description,
+        articles=(body.articles or "").strip(),
         project_id=body.project_id,
         assignee_id=body.assignee_id,
         created_by_id=body.created_by_id,

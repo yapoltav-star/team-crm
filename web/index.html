@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="top">
-    <div class="brand">Team CRM</div>
+    <div class="brand">Team CRM <span>ops</span></div>
     <div class="filters">
       <select id="projectFilter"><option value="">Все проекты</option></select>
       <button id="btnNewProject" type="button">+ Проект</button>
@@ -32,7 +32,10 @@
       <div id="managerBar" class="manager-bar">
         <div>
           <div class="manager-name" id="managerName">Вся команда</div>
-          <div class="manager-sub" id="managerSub">Выбери человека слева или пиши задачу ниже</div>
+          <div class="manager-sub" id="managerSub">
+            Люди слева · задача сверху · артикул на карточке.
+            Пример: «042 голд — проверить остаток»
+          </div>
         </div>
         <form id="quickAdd" class="quick-add">
           <select id="assignTo" name="assign_to" title="Кому задача">
@@ -40,7 +43,12 @@
             <option value="me">Себе</option>
             <option value="boss">Владельцу</option>
           </select>
-          <input name="title" placeholder="Текст задачи…" required autocomplete="off" />
+          <input
+            name="title"
+            placeholder="задача… можно с артикулом: 042 голд"
+            required
+            autocomplete="off"
+          />
           <button type="submit">Назначить</button>
         </form>
       </div>
@@ -55,6 +63,9 @@
       <input type="hidden" name="id" />
       <label>Текст
         <input name="title" required autocomplete="off" />
+      </label>
+      <label>Артикулы <span class="hint-mono">042_S11_g, через запятую</span>
+        <input name="articles" placeholder="042_S11_g" autocomplete="off" />
       </label>
       <label>Описание
         <textarea name="description" rows="3"></textarea>

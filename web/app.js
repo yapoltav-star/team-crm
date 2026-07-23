@@ -156,17 +156,24 @@ function renderBoard() {
       card.className = "card";
       card.draggable = true;
       card.dataset.id = t.id;
+      const skus = parseArticles(t.articles);
+      const skuHtml = skus.length
+        ? `<div class="card-skus">${skus
+            .map((s) => `<span class="sku">${escapeHtml(s)}</span>`)
+            .join("")}</div>`
+        : "";
       card.innerHTML = `
         <div class="card-actions">
           <button type="button" class="btn-edit" title="Редактировать">✎</button>
           <button type="button" class="btn-del danger" title="Удалить">✕</button>
         </div>
+        ${skuHtml}
         <h3>${escapeHtml(t.title)}</h3>
         ${t.description ? `<div class="desc">${escapeHtml(t.description)}</div>` : ""}
         <div class="meta">
-          ${t.project_name ? `<span class="chip project">${escapeHtml(t.project_name)}</span>` : ""}
-          ${t.assignee_name ? `<span class="chip">→ ${escapeHtml(t.assignee_name)}</span>` : ""}
+          ${t.assignee_name ? `<span class="chip assignee">→ ${escapeHtml(t.assignee_name)}</span>` : ""}
           ${t.created_by_name ? `<span class="chip">от ${escapeHtml(t.created_by_name)}</span>` : ""}
+          ${t.project_name ? `<span class="chip project">${escapeHtml(t.project_name)}</span>` : ""}
           ${t.kind === "weekly" ? `<span class="chip">↻ ${escapeHtml(t.weekdays)} @ ${escapeHtml(t.notify_time)}</span>` : ""}
         </div>
       `;
@@ -213,6 +220,14 @@ function escapeHtml(s) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function parseArticles(raw) {
+  if (!raw) return [];
+  return String(raw)
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function resolveAssigneeId(mode) {
@@ -400,6 +415,7 @@ function openTaskDialog(task) {
   $("#dlgTitle").textContent = `Задача #${task.id}`;
   form.elements.id.value = task.id;
   form.elements.title.value = task.title || "";
+  form.elements.articles.value = task.articles || "";
   form.elements.description.value = task.description || "";
   form.elements.status.value = task.status || "todo";
   fillTaskDialogSelects(task);
@@ -433,6 +449,7 @@ $("#dlgForm").addEventListener("submit", async (e) => {
   const body = {
     title: String(form.elements.title.value || "").trim(),
     description: String(form.elements.description.value || ""),
+    articles: String(form.elements.articles.value || "").trim(),
     status: form.elements.status.value,
     assignee_id: form.elements.assignee_id.value
       ? Number(form.elements.assignee_id.value)

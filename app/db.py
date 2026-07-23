@@ -23,6 +23,7 @@ async def init_db() -> None:
         # мягкая миграция для уже существующей БД на Railway
         for stmt in (
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by_id INTEGER",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS articles VARCHAR(500) DEFAULT ''",
             "ALTER TABLE employees ALTER COLUMN telegram_id TYPE BIGINT",
         ):
             try:

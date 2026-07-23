@@ -54,6 +54,8 @@ class Task(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str] = mapped_column(Text, default="")
+    # полный артикул(и), через запятую: 042_S11_g,041_X10_g
+    articles: Mapped[str] = mapped_column(String(500), default="")
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
