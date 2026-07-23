@@ -7,7 +7,7 @@ from datetime import date, datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -17,6 +17,59 @@ from app.models import Employee, Task, TaskRun
 from app.notify import done_kb, ensure_run, notify_task_assignee, resolve_run
 
 logger = logging.getLogger("crm-bot")
+
+
+def _tg_name(user: User) -> str:
+    name = (user.full_name or user.username or f"User {user.id}").strip()
+    return name[:200] or f"User {user.id}"
+
+
+async def find_employee(session: AsyncSession, telegram_id: int) -> Employee | None:
+    tid = int(telegram_id)
+    emp = await session.scalar(select(Employee).where(Employee.telegram_id == tid))
+    if emp:
+        return emp
+    # fallback если в БД тип/значение сравнилось криво
+    for row in (await session.scalars(select(Employee))).all():
+        try:
+            if int(row.telegram_id) == tid:
+                return row
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+async def ensure_member(
+    session: AsyncSession,
+    settings: Settings,
+    user: User,
+    *,
+    create_if_missing: bool = True,
+) -> Employee | None:
+    tid = int(user.id)
+    if tid == int(settings.owner_telegram_id):
+        return await ensure_owner(session, tid)
+
+    emp = await find_employee(session, tid)
+    name = _tg_name(user)
+    if emp:
+        emp.active = True
+        # подтянуть имя из Telegram, если в CRM ещё заглушка
+        if not emp.name or emp.name.startswith("User ") or emp.name == "Владелец":
+            if emp.role != "owner":
+                emp.name = name
+        await session.commit()
+        return emp
+
+    if not create_if_missing or not settings.allow_self_join:
+        return None
+
+    emp = Employee(telegram_id=tid, name=name, role="manager", active=True)
+    session.add(emp)
+    await session.commit()
+    await session.refresh(emp)
+    logger.info("self-join manager id=%s telegram_id=%s name=%s", emp.id, tid, name)
+    return emp
 
 
 def _session(proxy: str | None) -> AiohttpSession:
@@ -30,13 +83,15 @@ def _session(proxy: str | None) -> AiohttpSession:
 
 
 async def ensure_owner(session: AsyncSession, owner_id: int) -> Employee:
-    emp = await session.scalar(select(Employee).where(Employee.telegram_id == owner_id))
+    tid = int(owner_id)
+    emp = await find_employee(session, tid)
     if emp:
         emp.role = "owner"
         emp.active = True
+        emp.telegram_id = tid
         await session.commit()
         return emp
-    emp = Employee(telegram_id=owner_id, name="Владелец", role="owner")
+    emp = Employee(telegram_id=tid, name="Владелец", role="owner", active=True)
     session.add(emp)
     await session.commit()
     await session.refresh(emp)
@@ -269,8 +324,16 @@ def build_dispatcher(
         if not message.from_user:
             return
         async with session_factory() as session:
-            if message.from_user.id == settings.owner_telegram_id:
-                await ensure_owner(session, settings.owner_telegram_id)
+            emp = await ensure_member(session, settings, message.from_user, create_if_missing=True)
+            if not emp:
+                await message.answer(
+                    "Нет доступа.\n"
+                    f"Твой Telegram id: <code>{message.from_user.id}</code>\n"
+                    "Перешли его владельцу — /add_manager",
+                    parse_mode="HTML",
+                )
+                return
+            if emp.role == "owner" or int(message.from_user.id) == int(settings.owner_telegram_id):
                 await message.answer(
                     "CRM-бот (владелец).\n"
                     "/add_manager <id> <Имя>\n"
@@ -280,19 +343,16 @@ def build_dispatcher(
                     "Канбан: сайт Railway."
                 )
                 return
-            emp = await session.scalar(
-                select(Employee).where(Employee.telegram_id == message.from_user.id)
-            )
-            if not emp:
-                await message.answer("Нет доступа. Попроси владельца /add_manager.")
-                return
-            await message.answer(f"Привет, {emp.name}!\n{help_common}")
+            await message.answer(f"Привет, {emp.name}! Ты в команде.\n{help_common}")
 
-    async def _author(session: AsyncSession, telegram_id: int) -> Employee | None:
-        tid = int(telegram_id)
-        if tid == int(settings.owner_telegram_id):
-            return await ensure_owner(session, tid)
-        return await session.scalar(select(Employee).where(Employee.telegram_id == tid))
+    async def _author(session: AsyncSession, user: User | int) -> Employee | None:
+        if isinstance(user, int):
+            # legacy call sites with bare id — lookup only, no invent name
+            tid = int(user)
+            if tid == int(settings.owner_telegram_id):
+                return await ensure_owner(session, tid)
+            return await find_employee(session, tid)
+        return await ensure_member(session, settings, user, create_if_missing=True)
 
     @dp.message(Command("todo"))
     async def cmd_todo(message: Message, command: CommandObject) -> None:
@@ -301,7 +361,7 @@ def build_dispatcher(
             await message.answer("Формат: /todo Сделать отчёт")
             return
         async with session_factory() as session:
-            author = await _author(session, message.from_user.id)
+            author = await _author(session, message.from_user)
             if not author:
                 await message.answer("Нет доступа.")
                 return
@@ -322,7 +382,7 @@ def build_dispatcher(
             await message.answer("Формат: /boss Нужно согласовать закупку")
             return
         async with session_factory() as session:
-            author = await _author(session, message.from_user.id)
+            author = await _author(session, message.from_user)
             owner = await ensure_owner(session, settings.owner_telegram_id)
             if not author:
                 await message.answer("Нет доступа.")
@@ -348,7 +408,7 @@ def build_dispatcher(
             await message.answer("Формат: /for 123456 | текст задачи")
             return
         async with session_factory() as session:
-            author = await _author(session, message.from_user.id)
+            author = await _author(session, message.from_user)
             assignee = await session.scalar(select(Employee).where(Employee.telegram_id == int(left)))
             if not author:
                 await message.answer("Нет доступа.")
@@ -371,7 +431,7 @@ def build_dispatcher(
         if not message.from_user:
             return
         async with session_factory() as session:
-            emp = await _author(session, message.from_user.id)
+            emp = await _author(session, message.from_user)
             if not emp:
                 await message.answer("Нет доступа.")
                 return
@@ -383,7 +443,7 @@ def build_dispatcher(
         if not message.from_user:
             return
         async with session_factory() as session:
-            emp = await _author(session, message.from_user.id)
+            emp = await _author(session, message.from_user)
             if not emp:
                 await message.answer("Нет доступа.")
                 return
@@ -562,9 +622,12 @@ def build_dispatcher(
         wait = await message.answer("Понял, думаю…")
         try:
             async with session_factory() as session:
-                author = await _author(session, message.from_user.id)
+                author = await _author(session, message.from_user)
                 if not author:
-                    await wait.edit_text("Нет доступа. Попроси /add_manager.")
+                    await wait.edit_text(
+                        "Не удалось войти в команду. Нажми /start.\n"
+                        f"Твой id: {message.from_user.id}"
+                    )
                     return
                 people = (
                     await session.scalars(select(Employee).where(Employee.active.is_(True)))

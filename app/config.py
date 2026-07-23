@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
+    # менеджер пишет /start или текст — сам появляется в команде
+    allow_self_join: bool = Field(default=True, alias="ALLOW_SELF_JOIN")
 
     @field_validator(
         "telegram_proxy",
@@ -33,6 +35,17 @@ class Settings(BaseSettings):
     def empty_str(cls, value: object) -> object:
         if value is None:
             return ""
+        return value
+
+    @field_validator("allow_self_join", mode="before")
+    @classmethod
+    def boolish(cls, value: object) -> object:
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in {"0", "false", "no", "off", ""}:
+                return False
+            if v in {"1", "true", "yes", "on"}:
+                return True
         return value
 
     @property
