@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import Settings
 from app.models import Employee, Task, TaskRun
-from app.notify import done_kb, ensure_run, notify_task_assignee
+from app.notify import done_kb, ensure_run, notify_task_assignee, resolve_run
 
 logger = logging.getLogger("crm-bot")
 
@@ -207,7 +207,7 @@ async def materialize_and_notify(
                 await bot.send_message(
                     task.assignee.telegram_id,
                     text,
-                    reply_markup=done_kb(run.id),
+                    reply_markup=done_kb(int(run.id), int(task.id)),
                     parse_mode="HTML",
                 )
                 run.notified_at = datetime.utcnow()
@@ -289,9 +289,10 @@ def build_dispatcher(
             await message.answer(f"Привет, {emp.name}!\n{help_common}")
 
     async def _author(session: AsyncSession, telegram_id: int) -> Employee | None:
-        if telegram_id == settings.owner_telegram_id:
-            return await ensure_owner(session, settings.owner_telegram_id)
-        return await session.scalar(select(Employee).where(Employee.telegram_id == telegram_id))
+        tid = int(telegram_id)
+        if tid == int(settings.owner_telegram_id):
+            return await ensure_owner(session, tid)
+        return await session.scalar(select(Employee).where(Employee.telegram_id == tid))
 
     @dp.message(Command("todo"))
     async def cmd_todo(message: Message, command: CommandObject) -> None:
@@ -487,39 +488,43 @@ def build_dispatcher(
     async def on_done(callback: CallbackQuery) -> None:
         if not callback.data or not callback.from_user:
             return
-        run_id = int(callback.data.split(":", 1)[1])
+        parts = callback.data.split(":")
+        try:
+            run_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            task_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+        except ValueError:
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+
         notify_ids: set[int] = set()
         name = "?"
         title = ""
+        uid = int(callback.from_user.id)
         async with session_factory() as session:
-            run = await session.scalar(
-                select(TaskRun)
-                .where(TaskRun.id == run_id)
-                .options(
-                    selectinload(TaskRun.task).selectinload(Task.assignee),
-                    selectinload(TaskRun.task).selectinload(Task.created_by),
-                )
-            )
+            run = await resolve_run(session, run_id=run_id, task_id=task_id)
             if not run or not run.task:
-                await callback.answer("Не найдено", show_alert=True)
+                logger.warning("done miss data=%s run_id=%s task_id=%s", callback.data, run_id, task_id)
+                await callback.answer(
+                    "Задача не найдена. Создай новую — старые кнопки могли протухнуть после деплоя.",
+                    show_alert=True,
+                )
                 return
             assignee = run.task.assignee
-            if (
-                assignee
-                and callback.from_user.id not in {assignee.telegram_id, settings.owner_telegram_id}
-            ):
+            allowed = {int(settings.owner_telegram_id)}
+            if assignee and assignee.telegram_id is not None:
+                allowed.add(int(assignee.telegram_id))
+            if uid not in allowed:
                 await callback.answer("Не твоя задача", show_alert=True)
                 return
             run.status = "done"
             run.completed_at = datetime.utcnow()
-            if run.task.status != "done":
-                run.task.status = "done"
+            run.task.status = "done"
             await session.commit()
             name = assignee.name if assignee else "?"
             title = run.task.title
-            notify_ids.add(settings.owner_telegram_id)
-            if run.task.created_by:
-                notify_ids.add(run.task.created_by.telegram_id)
+            notify_ids.add(int(settings.owner_telegram_id))
+            if run.task.created_by and run.task.created_by.telegram_id is not None:
+                notify_ids.add(int(run.task.created_by.telegram_id))
         await callback.answer("Готово ✅")
         if callback.message:
             try:
@@ -527,7 +532,7 @@ def build_dispatcher(
             except Exception:  # noqa: BLE001
                 pass
         for tid in notify_ids:
-            if tid == callback.from_user.id:
+            if tid == uid:
                 continue
             try:
                 await callback.bot.send_message(tid, f"✅ {name} сделал(а): {title}")
