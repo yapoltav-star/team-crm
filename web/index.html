@@ -12,12 +12,34 @@
     <div class="filters">
       <select id="projectFilter"><option value="">Все проекты</option></select>
       <button id="btnNewProject" type="button">+ Проект</button>
-      <button id="btnNewTask" type="button">+ Задача</button>
       <button id="btnNewManager" type="button">+ Менеджер</button>
     </div>
   </header>
 
-  <main id="board" class="board"></main>
+  <div class="layout">
+    <aside class="people">
+      <div class="people-head">
+        <h2>Менеджеры</h2>
+        <button id="btnAllPeople" type="button" class="ghost">Все</button>
+      </div>
+      <div id="peopleList" class="people-list"></div>
+    </aside>
+
+    <section class="workspace">
+      <div id="managerBar" class="manager-bar hidden">
+        <div>
+          <div class="manager-name" id="managerName">—</div>
+          <div class="manager-sub" id="managerSub">Выбери менеджера слева</div>
+        </div>
+        <form id="quickAdd" class="quick-add">
+          <input name="title" placeholder="Новая задача этому менеджеру…" required autocomplete="off" />
+          <button type="submit">Добавить</button>
+        </form>
+      </div>
+      <main id="board" class="board"></main>
+      <p id="emptyHint" class="empty-hint hidden">У этого менеджера пока нет задач. Напиши сверху и нажми «Добавить».</p>
+    </section>
+  </div>
 
   <dialog id="dlg">
     <form method="dialog" id="dlgForm">

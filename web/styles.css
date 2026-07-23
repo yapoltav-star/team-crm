@@ -65,15 +65,131 @@ button {
 
 button:hover { filter: brightness(1.08); }
 
+button.ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  padding: 0.35rem 0.6rem;
+  font-weight: 500;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: calc(100vh - 70px);
+}
+
+.people {
+  border-right: 1px solid var(--line);
+  background: rgba(18, 24, 32, 0.7);
+  padding: 1rem;
+}
+
+.people-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.people-head h2 {
+  margin: 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.people-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.person {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 0.7rem 0.8rem;
+}
+
+.person.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.person-name { font-weight: 600; }
+.person-count {
+  min-width: 1.5rem;
+  text-align: center;
+  background: #1c2633;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 0.15rem 0.45rem;
+}
+
+.people-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.workspace { min-width: 0; }
+
+.manager-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem 1.25rem 0;
+  flex-wrap: wrap;
+}
+
+.manager-bar.hidden,
+.empty-hint.hidden { display: none; }
+
+.manager-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.manager-sub {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 0.15rem;
+}
+
+.quick-add {
+  display: flex;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: min(420px, 100%);
+}
+
+.quick-add input { flex: 1; }
+
+.empty-hint {
+  color: var(--muted);
+  padding: 0 1.25rem;
+}
+
 .board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
   gap: 1rem;
   padding: 1.25rem;
   align-items: start;
 }
 
 @media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .people { border-right: none; border-bottom: 1px solid var(--line); }
   .board { grid-template-columns: 1fr; }
 }
 

@@ -4,7 +4,11 @@ const COLS = [
   { id: "done", title: "Сделано" },
 ];
 
-const state = { board: null, dragId: null };
+const state = {
+  board: null,
+  dragId: null,
+  selectedManagerId: null, // null = all
+};
 
 const $ = (s) => document.querySelector(s);
 
@@ -25,12 +29,34 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+function managersOnly() {
+  return (state.board?.employees || []).filter((e) => e.role === "manager" || e.role === "owner");
+}
+
+function filteredTasks() {
+  const projectId = $("#projectFilter").value;
+  return state.board.tasks.filter((t) => {
+    if (projectId && String(t.project_id) !== projectId) return false;
+    if (state.selectedManagerId && String(t.assignee_id) !== String(state.selectedManagerId)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function openCount(employeeId) {
+  return state.board.tasks.filter(
+    (t) => t.assignee_id === employeeId && t.status !== "done"
+  ).length;
+}
+
 function fillSelects() {
   const projects = state.board.projects;
   const employees = state.board.employees;
   const pf = $("#projectFilter");
   const cur = pf.value;
-  pf.innerHTML = `<option value="">Все проекты</option>` +
+  pf.innerHTML =
+    `<option value="">Все проекты</option>` +
     projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
   pf.value = cur;
 
@@ -42,9 +68,55 @@ function fillSelects() {
     employees.map((e) => `<option value="${e.id}">${e.name}</option>`).join("");
 }
 
-function render() {
-  const projectId = $("#projectFilter").value;
-  const tasks = state.board.tasks.filter((t) => !projectId || String(t.project_id) === projectId);
+function renderPeople() {
+  const list = $("#peopleList");
+  list.innerHTML = "";
+  const people = managersOnly();
+  if (!people.length) {
+    list.innerHTML = `<div class="people-empty">Пока никого нет.<br/>Нажми «+ Менеджер».</div>`;
+    return;
+  }
+  for (const m of people) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className =
+      "person" + (String(state.selectedManagerId) === String(m.id) ? " active" : "");
+    const open = openCount(m.id);
+    btn.innerHTML = `
+      <span class="person-name">${escapeHtml(m.name)}</span>
+      <span class="person-count">${open}</span>
+    `;
+    btn.addEventListener("click", () => {
+      state.selectedManagerId = m.id;
+      render();
+    });
+    list.appendChild(btn);
+  }
+}
+
+function renderManagerBar() {
+  const bar = $("#managerBar");
+  const hint = $("#emptyHint");
+  if (!state.selectedManagerId) {
+    bar.classList.add("hidden");
+    hint.classList.add("hidden");
+    return;
+  }
+  const m = state.board.employees.find((e) => e.id === state.selectedManagerId);
+  if (!m) {
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.remove("hidden");
+  $("#managerName").textContent = m.name;
+  const tasks = filteredTasks();
+  const open = tasks.filter((t) => t.status !== "done").length;
+  $("#managerSub").textContent = `Открытых задач: ${open} · всего на доске: ${tasks.length}`;
+  hint.classList.toggle("hidden", tasks.length > 0);
+}
+
+function renderBoard() {
+  const tasks = filteredTasks();
   const board = $("#board");
   board.innerHTML = "";
 
@@ -84,7 +156,7 @@ function render() {
         ${t.description ? `<div class="desc">${escapeHtml(t.description)}</div>` : ""}
         <div class="meta">
           ${t.project_name ? `<span class="chip project">${escapeHtml(t.project_name)}</span>` : ""}
-          ${t.assignee_name ? `<span class="chip">${escapeHtml(t.assignee_name)}</span>` : ""}
+          ${!state.selectedManagerId && t.assignee_name ? `<span class="chip">${escapeHtml(t.assignee_name)}</span>` : ""}
           ${t.kind === "weekly" ? `<span class="chip">↻ ${escapeHtml(t.weekdays)} @ ${escapeHtml(t.notify_time)}</span>` : ""}
         </div>
       `;
@@ -104,6 +176,13 @@ function render() {
   }
 }
 
+function render() {
+  fillSelects();
+  renderPeople();
+  renderManagerBar();
+  renderBoard();
+}
+
 function escapeHtml(s) {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -114,11 +193,45 @@ function escapeHtml(s) {
 
 async function load() {
   state.board = await api("/api/board");
-  fillSelects();
+  if (
+    state.selectedManagerId &&
+    !state.board.employees.some((e) => e.id === state.selectedManagerId)
+  ) {
+    state.selectedManagerId = null;
+  }
   render();
 }
 
 $("#projectFilter").addEventListener("change", render);
+
+$("#btnAllPeople").addEventListener("click", () => {
+  state.selectedManagerId = null;
+  render();
+});
+
+$("#quickAdd").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!state.selectedManagerId) return;
+  const input = e.target.elements.title;
+  const title = String(input.value || "").trim();
+  if (!title) return;
+  const projectId = $("#projectFilter").value;
+  await api("/api/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      description: "",
+      project_id: projectId ? Number(projectId) : null,
+      assignee_id: Number(state.selectedManagerId),
+      kind: "once",
+      weekdays: "",
+      notify_time: "09:00",
+      status: "todo",
+    }),
+  });
+  input.value = "";
+  await load();
+});
 
 $("#btnNewProject").addEventListener("click", async () => {
   const name = prompt("Название проекта:");
@@ -131,18 +244,13 @@ $("#btnNewManager").addEventListener("click", async () => {
   const name = prompt("Имя менеджера:");
   const tid = prompt("Telegram numeric id:");
   if (!name || !tid) return;
-  await api("/api/employees", {
+  const emp = await api("/api/employees", {
     method: "POST",
     body: JSON.stringify({ name, telegram_id: Number(tid), role: "manager" }),
   });
   await load();
-});
-
-$("#btnNewTask").addEventListener("click", () => {
-  fillSelects();
-  $("#dlgTitle").textContent = "Новая задача";
-  $("#dlgForm").reset();
-  $("#dlg").showModal();
+  state.selectedManagerId = emp.id;
+  render();
 });
 
 $("#dlgForm").addEventListener("submit", async (e) => {
