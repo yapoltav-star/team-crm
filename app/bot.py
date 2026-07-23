@@ -8,7 +8,6 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from aiohttp import TCPConnector
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -20,9 +19,11 @@ logger = logging.getLogger("crm-bot")
 
 
 def _session(proxy: str | None) -> AiohttpSession:
-    if proxy:
-        return AiohttpSession(proxy=proxy)
-    return AiohttpSession(connector=TCPConnector(family=socket.AF_INET))
+    # Prefer IPv4 — Telegram DNS/IPv6 often flakes from RU/cloud hosts.
+    # Do not pass connector= into AiohttpSession (goes to BaseSession and crashes).
+    session = AiohttpSession(proxy=proxy) if proxy else AiohttpSession()
+    session._connector_init["family"] = socket.AF_INET
+    return session
 
 
 def done_kb(run_id: int) -> InlineKeyboardMarkup:
@@ -202,10 +203,11 @@ def build_dispatcher(
     dp = Dispatcher()
 
     help_common = (
-        "Команды для всех:\n"
-        "/todo текст — задача себе\n"
-        "/boss текст — задача владельцу\n"
-        "/for <telegram_id> | текст — задача человеку\n"
+        "Можно писать обычным текстом или голосом.\n"
+        "Команды:\n"
+        "/todo текст — себе\n"
+        "/boss текст — владельцу\n"
+        "/for <id> | текст — человеку\n"
         "/my — мои открытые\n"
     )
 
@@ -475,5 +477,120 @@ def build_dispatcher(
                 await callback.bot.send_message(tid, f"✅ {name} сделал(а): {title}")
             except Exception:  # noqa: BLE001
                 pass
+
+    def _match_assignee(people: list[Employee], token: str, author: Employee) -> Employee | None:
+        t = (token or "").strip().lower()
+        if t in {"me", "себе", "мне", "я"}:
+            return author
+        if t in {"boss", "босс", "владелец", "директор", "директору", "шефу", "owner"}:
+            return next((p for p in people if p.role == "owner"), None)
+        for p in people:
+            if t and t in p.name.lower():
+                return p
+        return None
+
+    async def _handle_natural(message: Message, text: str) -> None:
+        if not message.from_user or not text.strip():
+            return
+        if not settings.nlp_enabled:
+            await message.answer(
+                "Пока доступны только команды. Добавь OPENAI_API_KEY в Railway — заработает текст/голос.\n"
+                f"{help_common}"
+            )
+            return
+        wait = await message.answer("Понял, думаю…")
+        try:
+            async with session_factory() as session:
+                author = await _author(session, message.from_user.id)
+                if not author:
+                    await wait.edit_text("Нет доступа. Попроси /add_manager.")
+                    return
+                people = (
+                    await session.scalars(select(Employee).where(Employee.active.is_(True)))
+                ).all()
+                from app.nlp import parse_intent
+
+                intent = await parse_intent(
+                    settings,
+                    text=text,
+                    author_name=author.name,
+                    people=[{"name": p.name, "role": p.role} for p in people],
+                )
+                action = intent.get("action")
+                if action == "create_task":
+                    title = str(intent.get("title") or "").strip()
+                    token = str(intent.get("assignee") or "me")
+                    if not title:
+                        await wait.edit_text("Не увидел текст задачи. Сформулируй ещё раз.")
+                        return
+                    assignee = _match_assignee(list(people), token, author)
+                    if not assignee:
+                        await wait.edit_text(
+                            f"Не понял, кому задача («{token}»). Назови имя из команды или скажи «себе»/«боссу»."
+                        )
+                        return
+                    await create_and_notify(
+                        session=session,
+                        bot=message.bot,
+                        settings=settings,
+                        title=title,
+                        assignee=assignee,
+                        author=author,
+                    )
+                    await wait.edit_text(f"Готово: задача для {assignee.name}\n«{title}»")
+                    return
+                if action == "list_my_tasks":
+                    tasks = (
+                        await session.scalars(
+                            select(Task).where(
+                                Task.assignee_id == author.id,
+                                Task.active.is_(True),
+                                Task.status != "done",
+                            )
+                        )
+                    ).all()
+                    if not tasks:
+                        await wait.edit_text("Открытых задач нет.")
+                        return
+                    lines = [f"• {t.title} [{t.status}]" for t in tasks]
+                    await wait.edit_text("Твои задачи:\n" + "\n".join(lines))
+                    return
+                if action == "help":
+                    await wait.edit_text(help_common)
+                    return
+                await wait.edit_text(str(intent.get("reply") or help_common))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("nlp failed")
+            await wait.edit_text(f"Не смог разобрать: {exc}")
+
+    @dp.message(F.voice)
+    async def on_voice(message: Message) -> None:
+        if not settings.nlp_enabled:
+            await message.answer("Голос заработает после OPENAI_API_KEY в Railway.")
+            return
+        if not message.voice:
+            return
+        file = await message.bot.get_file(message.voice.file_id)
+        buf = await message.bot.download_file(file.file_path)
+        ogg = buf.read() if hasattr(buf, "read") else bytes(buf)
+        from app.nlp import transcribe_voice
+
+        try:
+            text = await transcribe_voice(settings, ogg)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("whisper failed")
+            await message.answer(f"Не распознал голос: {exc}")
+            return
+        if not text:
+            await message.answer("Пустая расшифровка, повтори.")
+            return
+        await message.answer(f"Распознал: {text}")
+        await _handle_natural(message, text)
+
+    @dp.message(F.text)
+    async def on_text(message: Message) -> None:
+        if not message.text or message.text.startswith("/"):
+            return
+        await _handle_natural(message, message.text)
 
     return bot, dp

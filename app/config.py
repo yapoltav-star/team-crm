@@ -17,10 +17,20 @@ class Settings(BaseSettings):
     telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")
     database_url: str = Field(default="", alias="DATABASE_URL")
     web_password: str = Field(default="", alias="WEB_PASSWORD")
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
+    openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
 
-    @field_validator("telegram_proxy", "database_url", "web_password", mode="before")
+    @field_validator(
+        "telegram_proxy",
+        "database_url",
+        "web_password",
+        "openai_api_key",
+        "openai_base_url",
+        mode="before",
+    )
     @classmethod
-    def empty_to_none_or_empty(cls, value: object) -> object:
+    def empty_str(cls, value: object) -> object:
         if value is None:
             return ""
         return value
@@ -34,7 +44,6 @@ class Settings(BaseSettings):
         url = (self.database_url or "").strip()
         if not url:
             return "sqlite+aiosqlite:///./data/crm.db"
-        # Railway sometimes gives postgres://
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://"):
@@ -44,6 +53,10 @@ class Settings(BaseSettings):
     @property
     def bot_enabled(self) -> bool:
         return bool(self.telegram_bot_token and self.owner_telegram_id)
+
+    @property
+    def nlp_enabled(self) -> bool:
+        return bool(str(self.openai_api_key).strip())
 
 
 @lru_cache
