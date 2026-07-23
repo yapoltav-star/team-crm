@@ -75,7 +75,8 @@ async def simple_password(request: Request, call_next):
 
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True}
+    # deploy marker — if Railway still shows old connector crash, this build never landed
+    return {"ok": True, "build": "session-fix-2026-07-24"}
 
 
 @app.get("/")

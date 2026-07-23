@@ -19,10 +19,12 @@ logger = logging.getLogger("crm-bot")
 
 
 def _session(proxy: str | None) -> AiohttpSession:
-    # Prefer IPv4 — Telegram DNS/IPv6 often flakes from RU/cloud hosts.
-    # Do not pass connector= into AiohttpSession (goes to BaseSession and crashes).
+    # aiogram 3.x: never pass connector= (BaseSession rejects it → startup crash).
+    # Prefer IPv4 via _connector_init — Telegram IPv6 often flakes from RU/cloud.
     session = AiohttpSession(proxy=proxy) if proxy else AiohttpSession()
-    session._connector_init["family"] = socket.AF_INET
+    init = getattr(session, "_connector_init", None)
+    if isinstance(init, dict):
+        init["family"] = socket.AF_INET
     return session
 
 

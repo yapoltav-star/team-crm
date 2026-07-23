@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY web ./web
 
+# bust stale image cache when code changes but layers look unchanged
+ARG DEPLOY_STAMP=2026-07-24-session-fix
+ENV DEPLOY_STAMP=${DEPLOY_STAMP}
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 
