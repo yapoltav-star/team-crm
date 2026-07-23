@@ -76,7 +76,7 @@ async def simple_password(request: Request, call_next):
 
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True, "build": "done-btn-2026-07-24"}
+    return {"ok": True, "build": "edit-tasks-2026-07-24"}
 
 
 @app.get("/")

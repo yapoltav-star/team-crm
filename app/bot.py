@@ -627,6 +627,56 @@ def build_dispatcher(
                     report = await format_open_tasks(session, assignee=person)
                     await wait.edit_text(report)
                     return
+                if action in {"edit_task", "delete_task"}:
+                    query = str(intent.get("query") or "").strip()
+                    who = str(intent.get("who") or ("all" if is_owner else "me")).strip()
+                    if not query:
+                        await wait.edit_text("Укажи id или часть названия задачи.")
+                        return
+                    who_l = who.lower()
+                    q = select(Task).where(Task.active.is_(True), Task.status != "done")
+                    if who_l in {"me", "себе", "мне", "я", "мои"}:
+                        q = q.where(Task.assignee_id == author.id)
+                    elif who_l not in {"all", "team", "все", "команда", "всех"}:
+                        scope_emp = _match_assignee(list(people), who, author)
+                        if not scope_emp:
+                            await wait.edit_text(f"Не нашёл человека «{who}».")
+                            return
+                        q = q.where(Task.assignee_id == scope_emp.id)
+                    elif not is_owner:
+                        q = q.where(Task.assignee_id == author.id)
+                    tasks = (await session.scalars(q.order_by(Task.id))).all()
+                    match: Task | None = None
+                    if query.isdigit():
+                        match = next((t for t in tasks if t.id == int(query)), None)
+                    if not match:
+                        ql = query.lower()
+                        cands = [t for t in tasks if ql in t.title.lower()]
+                        if len(cands) == 1:
+                            match = cands[0]
+                        elif len(cands) > 1:
+                            lines = [f"#{t.id} {t.title}" for t in cands[:8]]
+                            await wait.edit_text(
+                                "Нашёл несколько задач, уточни номером:\n" + "\n".join(lines)
+                            )
+                            return
+                    if not match:
+                        await wait.edit_text(f"Не нашёл задачу «{query}».")
+                        return
+                    if action == "delete_task":
+                        match.active = False
+                        await session.commit()
+                        await wait.edit_text(f"Удалил #{match.id}: {match.title}")
+                        return
+                    new_title = str(intent.get("title") or "").strip()
+                    if not new_title:
+                        await wait.edit_text("Какой новый текст задачи?")
+                        return
+                    old = match.title
+                    match.title = new_title
+                    await session.commit()
+                    await wait.edit_text(f"Обновил #{match.id}:\nбыло: {old}\nстало: {new_title}")
+                    return
                 if action == "help":
                     await wait.edit_text(help_common)
                     return

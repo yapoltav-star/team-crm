@@ -63,6 +63,49 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "edit_task",
+            "description": "Изменить текст открытой задачи (по номеру или по фрагменту названия)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "id задачи или часть названия",
+                    },
+                    "title": {"type": "string", "description": "Новый текст задачи"},
+                    "who": {
+                        "type": "string",
+                        "description": "me|all|имя — где искать, по умолчанию all для владельца",
+                    },
+                },
+                "required": ["query", "title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_task",
+            "description": "Удалить открытую задачу (по номеру или фрагменту названия)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "id задачи или часть названия",
+                    },
+                    "who": {
+                        "type": "string",
+                        "description": "me|all|имя — где искать",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "help",
             "description": "Краткая справка",
             "parameters": {"type": "object", "properties": {}},
@@ -94,6 +137,8 @@ async def parse_intent(
         "Создать задачу → create_task (assignee=me|boss|имя).\n"
         "Спросить задачи / кто чем занят / у кого что → list_tasks "
         "(who=all для всей команды, who=имя, who=me для своих).\n"
+        "Изменить текст → edit_task. Удалить → delete_task "
+        "(query = id или часть названия).\n"
         "Не выдумывай задачи — только вызывай tool, данные подтянет система.\n"
         "Иначе короткий ответ."
     )

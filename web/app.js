@@ -157,6 +157,10 @@ function renderBoard() {
       card.draggable = true;
       card.dataset.id = t.id;
       card.innerHTML = `
+        <div class="card-actions">
+          <button type="button" class="btn-edit" title="Редактировать">✎</button>
+          <button type="button" class="btn-del danger" title="Удалить">✕</button>
+        </div>
         <h3>${escapeHtml(t.title)}</h3>
         ${t.description ? `<div class="desc">${escapeHtml(t.description)}</div>` : ""}
         <div class="meta">
@@ -166,7 +170,20 @@ function renderBoard() {
           ${t.kind === "weekly" ? `<span class="chip">↻ ${escapeHtml(t.weekdays)} @ ${escapeHtml(t.notify_time)}</span>` : ""}
         </div>
       `;
+      card.querySelector(".btn-edit").addEventListener("click", (e) => {
+        e.stopPropagation();
+        openTaskDialog(t);
+      });
+      card.querySelector(".btn-del").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await deleteTask(t);
+      });
+      card.addEventListener("dblclick", () => openTaskDialog(t));
       card.addEventListener("dragstart", (e) => {
+        if (e.target.closest(".card-actions")) {
+          e.preventDefault();
+          return;
+        }
         state.dragId = t.id;
         card.classList.add("dragging");
         e.dataTransfer.setData("text/plain", String(t.id));
@@ -328,6 +345,89 @@ $("#btnNewManager").addEventListener("click", async () => {
   alert(
     `${name} добавлен(а).\n\nВажно: пусть откроет вашего бота в Telegram и нажмёт /start — иначе задачи не дойдут.`
   );
+});
+
+function fillTaskDialogSelects(task) {
+  const form = $("#dlgForm");
+  const assignee = form.elements.assignee_id;
+  const project = form.elements.project_id;
+  assignee.innerHTML = people()
+    .map(
+      (e) =>
+        `<option value="${e.id}" ${Number(task.assignee_id) === e.id ? "selected" : ""}>${escapeHtml(e.name)}</option>`
+    )
+    .join("");
+  project.innerHTML =
+    `<option value="">Без проекта</option>` +
+    (state.board.projects || [])
+      .map(
+        (p) =>
+          `<option value="${p.id}" ${Number(task.project_id) === p.id ? "selected" : ""}>${escapeHtml(p.name)}</option>`
+      )
+      .join("");
+}
+
+function openTaskDialog(task) {
+  const dlg = $("#taskDlg");
+  const form = $("#dlgForm");
+  $("#dlgTitle").textContent = `Задача #${task.id}`;
+  form.elements.id.value = task.id;
+  form.elements.title.value = task.title || "";
+  form.elements.description.value = task.description || "";
+  form.elements.status.value = task.status || "todo";
+  fillTaskDialogSelects(task);
+  dlg.showModal();
+}
+
+async function deleteTask(task) {
+  if (!confirm(`Удалить задачу «${task.title}»?`)) return;
+  await api(`/api/tasks/${task.id}`, { method: "DELETE" });
+  $("#taskDlg").close();
+  await load();
+}
+
+$("#dlgCancel").addEventListener("click", () => $("#taskDlg").close());
+
+$("#dlgDelete").addEventListener("click", async () => {
+  const id = Number($("#dlgForm").elements.id.value);
+  const task = state.board?.tasks?.find((t) => t.id === id);
+  if (!task) return;
+  try {
+    await deleteTask(task);
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
+
+$("#dlgForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const id = Number(form.elements.id.value);
+  const body = {
+    title: String(form.elements.title.value || "").trim(),
+    description: String(form.elements.description.value || ""),
+    status: form.elements.status.value,
+    assignee_id: form.elements.assignee_id.value
+      ? Number(form.elements.assignee_id.value)
+      : null,
+    project_id: form.elements.project_id.value
+      ? Number(form.elements.project_id.value)
+      : null,
+  };
+  if (!body.title) {
+    alert("Введи текст задачи");
+    return;
+  }
+  try {
+    await api(`/api/tasks/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    $("#taskDlg").close();
+    await load();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
 });
 
 load().catch((err) => {

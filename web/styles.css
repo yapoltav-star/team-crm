@@ -237,6 +237,7 @@ button.ghost {
 }
 
 .card {
+  position: relative;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -251,6 +252,40 @@ button.ghost {
 .card h3 {
   margin: 0 0 0.35rem;
   font-size: 1rem;
+  padding-right: 4.5rem;
+}
+
+.card-actions {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.card-actions button {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #1c2633;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 8px;
+}
+
+.card-actions button:hover {
+  color: var(--text);
+  filter: none;
+  border-color: var(--accent);
+}
+
+.card-actions button.danger:hover {
+  color: #fecaca;
+  border-color: #b91c1c;
+}
+
+button.danger {
+  color: #fca5a5;
 }
 
 .meta {
@@ -258,6 +293,19 @@ button.ghost {
   flex-wrap: wrap;
   gap: 0.35rem;
   margin-top: 0.55rem;
+}
+
+#taskDlg h3 {
+  margin: 0 0 0.25rem;
+  color: var(--text);
+}
+
+#dlgForm menu {
+  justify-content: space-between;
+}
+
+#dlgForm menu .danger {
+  margin-right: auto;
 }
 
 .chip {

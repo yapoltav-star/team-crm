@@ -48,6 +48,39 @@
     </section>
   </div>
 
+  <dialog id="taskDlg">
+    <form id="dlgForm" method="dialog">
+      <h3 id="dlgTitle">Задача</h3>
+      <input type="hidden" name="id" />
+      <label>Текст
+        <input name="title" required autocomplete="off" />
+      </label>
+      <label>Описание
+        <textarea name="description" rows="3"></textarea>
+      </label>
+      <label>Исполнитель
+        <select name="assignee_id"></select>
+      </label>
+      <label>Проект
+        <select name="project_id">
+          <option value="">Без проекта</option>
+        </select>
+      </label>
+      <label>Статус
+        <select name="status">
+          <option value="todo">К выполнению</option>
+          <option value="doing">В работе</option>
+          <option value="done">Сделано</option>
+        </select>
+      </label>
+      <menu>
+        <button type="button" id="dlgDelete" class="danger ghost">Удалить</button>
+        <button type="button" id="dlgCancel" class="ghost">Отмена</button>
+        <button type="submit" id="dlgSave">Сохранить</button>
+      </menu>
+    </form>
+  </dialog>
+
   <script src="/static/app.js"></script>
 </body>
 </html>
