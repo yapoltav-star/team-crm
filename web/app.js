@@ -7,7 +7,8 @@ const COLS = [
 const state = {
   board: null,
   dragId: null,
-  selectedManagerId: null, // null = all
+  selectedPersonId: null,
+  meId: Number(localStorage.getItem("crm_me_id") || 0) || null,
 };
 
 const $ = (s) => document.querySelector(s);
@@ -29,15 +30,23 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
-function managersOnly() {
-  return (state.board?.employees || []).filter((e) => e.role === "manager" || e.role === "owner");
+function people() {
+  return state.board?.employees || [];
+}
+
+function me() {
+  return people().find((e) => e.id === state.meId) || null;
+}
+
+function boss() {
+  return people().find((e) => e.role === "owner") || null;
 }
 
 function filteredTasks() {
   const projectId = $("#projectFilter").value;
   return state.board.tasks.filter((t) => {
     if (projectId && String(t.project_id) !== projectId) return false;
-    if (state.selectedManagerId && String(t.assignee_id) !== String(state.selectedManagerId)) {
+    if (state.selectedPersonId && String(t.assignee_id) !== String(state.selectedPersonId)) {
       return false;
     }
     return true;
@@ -52,42 +61,44 @@ function openCount(employeeId) {
 
 function fillSelects() {
   const projects = state.board.projects;
-  const employees = state.board.employees;
   const pf = $("#projectFilter");
   const cur = pf.value;
   pf.innerHTML =
     `<option value="">Все проекты</option>` +
     projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
   pf.value = cur;
+}
 
-  $("#dlgProject").innerHTML =
-    `<option value="">Без проекта</option>` +
-    projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-  $("#dlgAssignee").innerHTML =
-    `<option value="">Без исполнителя</option>` +
-    employees.map((e) => `<option value="${e.id}">${e.name}</option>`).join("");
+function updateMeLabel() {
+  const m = me();
+  $("#meLabel").textContent = m ? `вы: ${m.name}` : "не вошли";
 }
 
 function renderPeople() {
   const list = $("#peopleList");
   list.innerHTML = "";
-  const people = managersOnly();
-  if (!people.length) {
-    list.innerHTML = `<div class="people-empty">Пока никого нет.<br/>Нажми «+ Менеджер».</div>`;
+  const all = people();
+  if (!all.length) {
+    list.innerHTML = `<div class="people-empty">Пока никого нет.<br/>Добавь менеджера или войди.</div>`;
     return;
   }
-  for (const m of people) {
+  for (const m of all) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className =
-      "person" + (String(state.selectedManagerId) === String(m.id) ? " active" : "");
+      "person" + (String(state.selectedPersonId) === String(m.id) ? " active" : "");
     const open = openCount(m.id);
+    const role = m.role === "owner" ? "владелец" : "менеджер";
     btn.innerHTML = `
-      <span class="person-name">${escapeHtml(m.name)}</span>
+      <span>
+        <span class="person-name">${escapeHtml(m.name)}</span>
+        <span class="person-role">${role}</span>
+      </span>
       <span class="person-count">${open}</span>
     `;
     btn.addEventListener("click", () => {
-      state.selectedManagerId = m.id;
+      state.selectedPersonId = m.id;
+      $("#assignTo").value = "selected";
       render();
     });
     list.appendChild(btn);
@@ -95,23 +106,17 @@ function renderPeople() {
 }
 
 function renderManagerBar() {
-  const bar = $("#managerBar");
   const hint = $("#emptyHint");
-  if (!state.selectedManagerId) {
-    bar.classList.add("hidden");
-    hint.classList.add("hidden");
-    return;
-  }
-  const m = state.board.employees.find((e) => e.id === state.selectedManagerId);
-  if (!m) {
-    bar.classList.add("hidden");
-    return;
-  }
-  bar.classList.remove("hidden");
-  $("#managerName").textContent = m.name;
   const tasks = filteredTasks();
-  const open = tasks.filter((t) => t.status !== "done").length;
-  $("#managerSub").textContent = `Открытых задач: ${open} · всего на доске: ${tasks.length}`;
+  if (!state.selectedPersonId) {
+    $("#managerName").textContent = "Вся команда";
+    $("#managerSub").textContent = "Можно писать задачу себе, владельцу или выбранному человеку";
+  } else {
+    const m = people().find((e) => e.id === state.selectedPersonId);
+    $("#managerName").textContent = m ? m.name : "—";
+    const open = tasks.filter((t) => t.status !== "done").length;
+    $("#managerSub").textContent = `Открытых: ${open} · всего: ${tasks.length}`;
+  }
   hint.classList.toggle("hidden", tasks.length > 0);
 }
 
@@ -156,7 +161,8 @@ function renderBoard() {
         ${t.description ? `<div class="desc">${escapeHtml(t.description)}</div>` : ""}
         <div class="meta">
           ${t.project_name ? `<span class="chip project">${escapeHtml(t.project_name)}</span>` : ""}
-          ${!state.selectedManagerId && t.assignee_name ? `<span class="chip">${escapeHtml(t.assignee_name)}</span>` : ""}
+          ${t.assignee_name ? `<span class="chip">→ ${escapeHtml(t.assignee_name)}</span>` : ""}
+          ${t.created_by_name ? `<span class="chip">от ${escapeHtml(t.created_by_name)}</span>` : ""}
           ${t.kind === "weekly" ? `<span class="chip">↻ ${escapeHtml(t.weekdays)} @ ${escapeHtml(t.notify_time)}</span>` : ""}
         </div>
       `;
@@ -178,6 +184,7 @@ function renderBoard() {
 
 function render() {
   fillSelects();
+  updateMeLabel();
   renderPeople();
   renderManagerBar();
   renderBoard();
@@ -191,13 +198,35 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;");
 }
 
+function resolveAssigneeId(mode) {
+  if (mode === "me") {
+    if (!state.meId) throw new Error("Сначала нажми «Войти» и укажи свой Telegram id");
+    return state.meId;
+  }
+  if (mode === "boss") {
+    const b = boss();
+    if (!b) throw new Error("Владелец ещё не в базе — пусть напишет боту /start");
+    return b.id;
+  }
+  // selected
+  if (!state.selectedPersonId) {
+    throw new Error("Выбери человека слева или поставь «Себе» / «Владельцу»");
+  }
+  return state.selectedPersonId;
+}
+
 async function load() {
   state.board = await api("/api/board");
+  if (state.meId && !people().some((e) => e.id === state.meId)) {
+    // maybe match by telegram later — keep id if still valid only
+    state.meId = null;
+    localStorage.removeItem("crm_me_id");
+  }
   if (
-    state.selectedManagerId &&
-    !state.board.employees.some((e) => e.id === state.selectedManagerId)
+    state.selectedPersonId &&
+    !people().some((e) => e.id === state.selectedPersonId)
   ) {
-    state.selectedManagerId = null;
+    state.selectedPersonId = null;
   }
   render();
 }
@@ -205,32 +234,63 @@ async function load() {
 $("#projectFilter").addEventListener("change", render);
 
 $("#btnAllPeople").addEventListener("click", () => {
-  state.selectedManagerId = null;
+  state.selectedPersonId = null;
   render();
+});
+
+$("#btnLogin").addEventListener("click", async () => {
+  const tid = prompt("Твой Telegram numeric id (как в userinfobot):");
+  if (!tid || !/^\d+$/.test(tid)) return;
+  let emp = people().find((e) => String(e.telegram_id) === String(tid));
+  if (!emp) {
+    const name = prompt("Тебя ещё нет в CRM. Как тебя зовут?");
+    if (!name) return;
+    emp = await api("/api/employees", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        telegram_id: Number(tid),
+        role: "manager",
+      }),
+    });
+  }
+  state.meId = emp.id;
+  localStorage.setItem("crm_me_id", String(emp.id));
+  await load();
 });
 
 $("#quickAdd").addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!state.selectedManagerId) return;
   const input = e.target.elements.title;
   const title = String(input.value || "").trim();
   if (!title) return;
-  const projectId = $("#projectFilter").value;
-  await api("/api/tasks", {
-    method: "POST",
-    body: JSON.stringify({
-      title,
-      description: "",
-      project_id: projectId ? Number(projectId) : null,
-      assignee_id: Number(state.selectedManagerId),
-      kind: "once",
-      weekdays: "",
-      notify_time: "09:00",
-      status: "todo",
-    }),
-  });
-  input.value = "";
-  await load();
+  try {
+    if (!state.meId) {
+      alert("Сначала нажми «Войти» — чтобы было понятно, от кого задача.");
+      return;
+    }
+    const assigneeId = resolveAssigneeId($("#assignTo").value);
+    const projectId = $("#projectFilter").value;
+    await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        description: "",
+        project_id: projectId ? Number(projectId) : null,
+        assignee_id: Number(assigneeId),
+        created_by_id: Number(state.meId),
+        kind: "once",
+        weekdays: "",
+        notify_time: "09:00",
+        status: "todo",
+        notify_now: true,
+      }),
+    });
+    input.value = "";
+    await load();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
 });
 
 $("#btnNewProject").addEventListener("click", async () => {
@@ -249,28 +309,8 @@ $("#btnNewManager").addEventListener("click", async () => {
     body: JSON.stringify({ name, telegram_id: Number(tid), role: "manager" }),
   });
   await load();
-  state.selectedManagerId = emp.id;
+  state.selectedPersonId = emp.id;
   render();
-});
-
-$("#dlgForm").addEventListener("submit", async (e) => {
-  const submitter = e.submitter;
-  if (submitter && submitter.value === "cancel") return;
-  e.preventDefault();
-  const fd = new FormData($("#dlgForm"));
-  const body = {
-    title: fd.get("title"),
-    description: fd.get("description") || "",
-    project_id: fd.get("project_id") ? Number(fd.get("project_id")) : null,
-    assignee_id: fd.get("assignee_id") ? Number(fd.get("assignee_id")) : null,
-    kind: fd.get("kind"),
-    weekdays: fd.get("weekdays") || "",
-    notify_time: fd.get("notify_time") || "09:00",
-    status: "todo",
-  };
-  await api("/api/tasks", { method: "POST", body: JSON.stringify(body) });
-  $("#dlg").close();
-  await load();
 });
 
 load().catch((err) => {

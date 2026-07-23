@@ -34,12 +34,74 @@ def done_kb(run_id: int) -> InlineKeyboardMarkup:
 async def ensure_owner(session: AsyncSession, owner_id: int) -> Employee:
     emp = await session.scalar(select(Employee).where(Employee.telegram_id == owner_id))
     if emp:
+        emp.role = "owner"
+        emp.active = True
+        await session.commit()
         return emp
     emp = Employee(telegram_id=owner_id, name="Владелец", role="owner")
     session.add(emp)
     await session.commit()
     await session.refresh(emp)
     return emp
+
+
+async def _ensure_run(session: AsyncSession, task_id: int, due: date) -> TaskRun:
+    existing = await session.scalar(
+        select(TaskRun).where(TaskRun.task_id == task_id, TaskRun.due_date == due)
+    )
+    if existing:
+        return existing
+    run = TaskRun(task_id=task_id, due_date=due, status="pending")
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+    return run
+
+
+async def create_and_notify(
+    *,
+    session: AsyncSession,
+    bot: Bot,
+    settings: Settings,
+    title: str,
+    assignee: Employee,
+    author: Employee,
+    kind: str = "once",
+    weekdays: str = "",
+    notify_time: str | None = None,
+) -> Task:
+    task = Task(
+        title=title,
+        assignee_id=assignee.id,
+        created_by_id=author.id,
+        status="todo",
+        kind=kind,
+        weekdays=weekdays,
+        notify_time=notify_time or datetime.now(settings.tz).strftime("%H:%M"),
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    if kind == "once":
+        run = await _ensure_run(session, task.id, datetime.now(settings.tz).date())
+        text = (
+            f"📋 Новая задача от <b>{author.name}</b>\n"
+            f"<b>{title}</b>\n\n"
+            "Жми «Сделано», когда выполнишь."
+        )
+        try:
+            await bot.send_message(
+                assignee.telegram_id,
+                text,
+                reply_markup=done_kb(run.id),
+                parse_mode="HTML",
+            )
+            run.notified_at = datetime.utcnow()
+            await session.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("send task failed")
+    return task
 
 
 async def materialize_and_notify(
@@ -49,22 +111,19 @@ async def materialize_and_notify(
 ) -> None:
     now = datetime.now(settings.tz)
     today = now.date()
-    weekday = now.weekday() + 1  # 1=mon
+    weekday = now.weekday() + 1
     hm = now.strftime("%H:%M")
 
     async with session_factory() as session:
         await ensure_owner(session, settings.owner_telegram_id)
         weekly = (
-            await session.scalars(
-                select(Task).where(Task.active.is_(True), Task.kind == "weekly")
-            )
+            await session.scalars(select(Task).where(Task.active.is_(True), Task.kind == "weekly"))
         ).all()
         for task in weekly:
             days = [int(x) for x in (task.weekdays or "").split(",") if x.strip().isdigit()]
             if weekday in days:
                 await _ensure_run(session, task.id, today)
 
-        # notify pending runs
         runs = (
             await session.scalars(
                 select(TaskRun)
@@ -76,14 +135,22 @@ async def materialize_and_notify(
                     Task.active.is_(True),
                     Task.notify_time <= hm,
                 )
-                .options(selectinload(TaskRun.task).selectinload(Task.assignee))
+                .options(
+                    selectinload(TaskRun.task).selectinload(Task.assignee),
+                    selectinload(TaskRun.task).selectinload(Task.created_by),
+                )
             )
         ).all()
         for run in runs:
             task = run.task
             if not task or not task.assignee:
                 continue
-            text = f"📋 Задача на сегодня ({today.isoformat()})\n<b>{task.title}</b>\n\nЖми «Сделано», когда выполнишь."
+            author = task.created_by.name if task.created_by else "CRM"
+            text = (
+                f"📋 Задача на сегодня ({today.isoformat()}) от <b>{author}</b>\n"
+                f"<b>{task.title}</b>\n\n"
+                "Жми «Сделано», когда выполнишь."
+            )
             try:
                 await bot.send_message(
                     task.assignee.telegram_id,
@@ -96,7 +163,6 @@ async def materialize_and_notify(
                 logger.exception("notify failed run=%s", run.id)
         await session.commit()
 
-        # escalate
         if hm >= settings.escalate_time:
             pending = (
                 await session.scalars(
@@ -128,25 +194,20 @@ async def materialize_and_notify(
                     logger.exception("escalate failed")
 
 
-async def _ensure_run(session: AsyncSession, task_id: int, due: date) -> TaskRun:
-    existing = await session.scalar(
-        select(TaskRun).where(TaskRun.task_id == task_id, TaskRun.due_date == due)
-    )
-    if existing:
-        return existing
-    run = TaskRun(task_id=task_id, due_date=due, status="pending")
-    session.add(run)
-    await session.commit()
-    await session.refresh(run)
-    return run
-
-
 def build_dispatcher(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[Bot, Dispatcher]:
     bot = Bot(token=settings.telegram_bot_token, session=_session(settings.telegram_proxy))
     dp = Dispatcher()
+
+    help_common = (
+        "Команды для всех:\n"
+        "/todo текст — задача себе\n"
+        "/boss текст — задача владельцу\n"
+        "/for <telegram_id> | текст — задача человеку\n"
+        "/my — мои открытые\n"
+    )
 
     @dp.message(CommandStart())
     async def start(message: Message) -> None:
@@ -156,11 +217,12 @@ def build_dispatcher(
             if message.from_user.id == settings.owner_telegram_id:
                 await ensure_owner(session, settings.owner_telegram_id)
                 await message.answer(
-                    "CRM-бот.\n"
+                    "CRM-бот (владелец).\n"
                     "/add_manager <id> <Имя>\n"
-                    "/task <id> | текст — разовая\n"
-                    "/weekly <id> 1,3,5 10:00 | текст — еженедельная\n"
-                    "Канбан: открой сайт сервиса."
+                    "/task <id> | текст\n"
+                    "/weekly <id> 1,3,5 10:00 | текст\n"
+                    f"{help_common}"
+                    "Канбан: сайт Railway."
                 )
                 return
             emp = await session.scalar(
@@ -169,7 +231,108 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Нет доступа. Попроси владельца /add_manager.")
                 return
-            await message.answer(f"Привет, {emp.name}! Задачи будут приходить сюда.")
+            await message.answer(f"Привет, {emp.name}!\n{help_common}")
+
+    async def _author(session: AsyncSession, telegram_id: int) -> Employee | None:
+        if telegram_id == settings.owner_telegram_id:
+            return await ensure_owner(session, settings.owner_telegram_id)
+        return await session.scalar(select(Employee).where(Employee.telegram_id == telegram_id))
+
+    @dp.message(Command("todo"))
+    async def cmd_todo(message: Message, command: CommandObject) -> None:
+        title = (command.args or "").strip()
+        if not title or not message.from_user:
+            await message.answer("Формат: /todo Сделать отчёт")
+            return
+        async with session_factory() as session:
+            author = await _author(session, message.from_user.id)
+            if not author:
+                await message.answer("Нет доступа.")
+                return
+            await create_and_notify(
+                session=session,
+                bot=message.bot,
+                settings=settings,
+                title=title,
+                assignee=author,
+                author=author,
+            )
+        await message.answer("Задача себе создана.")
+
+    @dp.message(Command("boss"))
+    async def cmd_boss(message: Message, command: CommandObject) -> None:
+        title = (command.args or "").strip()
+        if not title or not message.from_user:
+            await message.answer("Формат: /boss Нужно согласовать закупку")
+            return
+        async with session_factory() as session:
+            author = await _author(session, message.from_user.id)
+            owner = await ensure_owner(session, settings.owner_telegram_id)
+            if not author:
+                await message.answer("Нет доступа.")
+                return
+            await create_and_notify(
+                session=session,
+                bot=message.bot,
+                settings=settings,
+                title=title,
+                assignee=owner,
+                author=author,
+            )
+        await message.answer("Задача отправлена владельцу.")
+
+    @dp.message(Command("for"))
+    async def cmd_for(message: Message, command: CommandObject) -> None:
+        raw = (command.args or "").strip()
+        if "|" not in raw or not message.from_user:
+            await message.answer("Формат: /for 123456 | текст задачи")
+            return
+        left, title = [x.strip() for x in raw.split("|", 1)]
+        if not left.isdigit() or not title:
+            await message.answer("Формат: /for 123456 | текст задачи")
+            return
+        async with session_factory() as session:
+            author = await _author(session, message.from_user.id)
+            assignee = await session.scalar(select(Employee).where(Employee.telegram_id == int(left)))
+            if not author:
+                await message.answer("Нет доступа.")
+                return
+            if not assignee:
+                await message.answer("Человек не найден в CRM. Сначала /add_manager.")
+                return
+            await create_and_notify(
+                session=session,
+                bot=message.bot,
+                settings=settings,
+                title=title,
+                assignee=assignee,
+                author=author,
+            )
+        await message.answer(f"Задача отправлена: {title}")
+
+    @dp.message(Command("my"))
+    async def cmd_my(message: Message) -> None:
+        if not message.from_user:
+            return
+        async with session_factory() as session:
+            emp = await _author(session, message.from_user.id)
+            if not emp:
+                await message.answer("Нет доступа.")
+                return
+            tasks = (
+                await session.scalars(
+                    select(Task).where(
+                        Task.assignee_id == emp.id,
+                        Task.active.is_(True),
+                        Task.status != "done",
+                    )
+                )
+            ).all()
+        if not tasks:
+            await message.answer("Открытых задач нет.")
+            return
+        lines = [f"• {t.title} [{t.status}]" for t in tasks]
+        await message.answer("Твои задачи:\n" + "\n".join(lines))
 
     @dp.message(Command("add_manager"))
     async def add_manager(message: Message, command: CommandObject) -> None:
@@ -193,14 +356,17 @@ def build_dispatcher(
             await session.commit()
         await message.answer(f"Менеджер {parts[1]} добавлен.")
         try:
-            await message.bot.send_message(int(parts[0]), f"Тебя добавили в CRM как {parts[1]}. /start")
+            await message.bot.send_message(
+                int(parts[0]),
+                f"Тебя добавили в CRM как {parts[1]}.\n/start",
+            )
         except Exception:  # noqa: BLE001
             pass
 
     @dp.message(Command("task"))
     async def once_task(message: Message, command: CommandObject) -> None:
         if not message.from_user or message.from_user.id != settings.owner_telegram_id:
-            await message.answer("Только владелец.")
+            await message.answer("Только владелец. Менеджерам: /todo /boss /for")
             return
         raw = (command.args or "").strip()
         if "|" not in raw:
@@ -211,32 +377,19 @@ def build_dispatcher(
             await message.answer("Формат: /task <telegram_id> | текст")
             return
         async with session_factory() as session:
+            author = await ensure_owner(session, settings.owner_telegram_id)
             emp = await session.scalar(select(Employee).where(Employee.telegram_id == int(left)))
             if not emp:
                 await message.answer("Сначала /add_manager")
                 return
-            task = Task(
+            await create_and_notify(
+                session=session,
+                bot=message.bot,
+                settings=settings,
                 title=title,
-                assignee_id=emp.id,
-                status="todo",
-                kind="once",
-                notify_time=datetime.now(settings.tz).strftime("%H:%M"),
+                assignee=emp,
+                author=author,
             )
-            session.add(task)
-            await session.commit()
-            await session.refresh(task)
-            run = await _ensure_run(session, task.id, datetime.now(settings.tz).date())
-            try:
-                await message.bot.send_message(
-                    emp.telegram_id,
-                    f"📋 Новая задача\n<b>{title}</b>",
-                    reply_markup=done_kb(run.id),
-                    parse_mode="HTML",
-                )
-                run.notified_at = datetime.utcnow()
-                await session.commit()
-            except Exception:  # noqa: BLE001
-                logger.exception("send once failed")
         await message.answer("Задача создана и отправлена.")
 
     @dp.message(Command("weekly"))
@@ -254,21 +407,22 @@ def build_dispatcher(
             await message.answer("Формат: /weekly <id> 1,3,5 10:00 | текст")
             return
         async with session_factory() as session:
+            author = await ensure_owner(session, settings.owner_telegram_id)
             emp = await session.scalar(select(Employee).where(Employee.telegram_id == int(parts[0])))
             if not emp:
                 await message.answer("Сначала /add_manager")
                 return
-            session.add(
-                Task(
-                    title=title,
-                    assignee_id=emp.id,
-                    status="todo",
-                    kind="weekly",
-                    weekdays=parts[1],
-                    notify_time=parts[2],
-                )
+            await create_and_notify(
+                session=session,
+                bot=message.bot,
+                settings=settings,
+                title=title,
+                assignee=emp,
+                author=author,
+                kind="weekly",
+                weekdays=parts[1],
+                notify_time=parts[2],
             )
-            await session.commit()
         await message.answer(f"Еженедельная задача создана: {title}")
 
     @dp.callback_query(F.data.startswith("done:"))
@@ -276,11 +430,17 @@ def build_dispatcher(
         if not callback.data or not callback.from_user:
             return
         run_id = int(callback.data.split(":", 1)[1])
+        notify_ids: set[int] = set()
+        name = "?"
+        title = ""
         async with session_factory() as session:
             run = await session.scalar(
                 select(TaskRun)
                 .where(TaskRun.id == run_id)
-                .options(selectinload(TaskRun.task).selectinload(Task.assignee))
+                .options(
+                    selectinload(TaskRun.task).selectinload(Task.assignee),
+                    selectinload(TaskRun.task).selectinload(Task.created_by),
+                )
             )
             if not run or not run.task:
                 await callback.answer("Не найдено", show_alert=True)
@@ -299,17 +459,21 @@ def build_dispatcher(
             await session.commit()
             name = assignee.name if assignee else "?"
             title = run.task.title
+            notify_ids.add(settings.owner_telegram_id)
+            if run.task.created_by:
+                notify_ids.add(run.task.created_by.telegram_id)
         await callback.answer("Готово ✅")
         if callback.message:
             try:
                 await callback.message.edit_text(f"✅ Сделано: {title}")
             except Exception:  # noqa: BLE001
                 pass
-        try:
-            await callback.bot.send_message(
-                settings.owner_telegram_id, f"✅ {name} сделал(а): {title}"
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        for tid in notify_ids:
+            if tid == callback.from_user.id:
+                continue
+            try:
+                await callback.bot.send_message(tid, f"✅ {name} сделал(а): {title}")
+            except Exception:  # noqa: BLE001
+                pass
 
     return bot, dp

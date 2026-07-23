@@ -40,10 +40,12 @@ class TaskIn(BaseModel):
     description: str = ""
     project_id: int | None = None
     assignee_id: int | None = None
+    created_by_id: int | None = None
     status: str = "todo"
     kind: str = "once"
     weekdays: str = ""
     notify_time: str = "09:00"
+    notify_now: bool = True
 
 
 class TaskPatch(BaseModel):
@@ -65,6 +67,7 @@ class TaskOut(BaseModel):
     description: str
     project_id: int | None
     assignee_id: int | None
+    created_by_id: int | None = None
     status: str
     kind: str
     weekdays: str
@@ -73,6 +76,7 @@ class TaskOut(BaseModel):
     position: int
     assignee_name: str | None = None
     project_name: str | None = None
+    created_by_name: str | None = None
 
     model_config = {"from_attributes": True}
 

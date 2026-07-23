@@ -29,7 +29,10 @@ class Employee(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    tasks: Mapped[list[Task]] = relationship(back_populates="assignee")
+    assigned_tasks: Mapped[list[Task]] = relationship(
+        back_populates="assignee",
+        foreign_keys="Task.assignee_id",
+    )
 
 
 class Project(Base):
@@ -52,6 +55,7 @@ class Task(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="todo")  # todo|doing|done
     kind: Mapped[str] = mapped_column(String(20), default="once")  # once|weekly
     weekdays: Mapped[str] = mapped_column(String(50), default="")  # "1,3,5"
@@ -61,7 +65,11 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     project: Mapped[Project | None] = relationship(back_populates="tasks")
-    assignee: Mapped[Employee | None] = relationship(back_populates="tasks")
+    assignee: Mapped[Employee | None] = relationship(
+        back_populates="assigned_tasks",
+        foreign_keys=[assignee_id],
+    )
+    created_by: Mapped[Employee | None] = relationship(foreign_keys=[created_by_id])
     runs: Mapped[list[TaskRun]] = relationship(back_populates="task")
 
 

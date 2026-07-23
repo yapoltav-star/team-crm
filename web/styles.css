@@ -123,7 +123,21 @@ button.ghost {
   box-shadow: 0 0 0 1px var(--accent);
 }
 
-.person-name { font-weight: 600; }
+.person-name { font-weight: 600; display: block; }
+.person-role {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+.me-label {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 0 0.25rem;
+}
+.quick-add select {
+  max-width: 150px;
+}
 .person-count {
   min-width: 1.5rem;
   text-align: center;

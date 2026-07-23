@@ -13,59 +13,40 @@
       <select id="projectFilter"><option value="">Все проекты</option></select>
       <button id="btnNewProject" type="button">+ Проект</button>
       <button id="btnNewManager" type="button">+ Менеджер</button>
+      <button id="btnLogin" type="button" class="ghost" title="Кто ты в CRM">Войти</button>
+      <span id="meLabel" class="me-label">не вошли</span>
     </div>
   </header>
 
   <div class="layout">
     <aside class="people">
       <div class="people-head">
-        <h2>Менеджеры</h2>
+        <h2>Команда</h2>
         <button id="btnAllPeople" type="button" class="ghost">Все</button>
       </div>
       <div id="peopleList" class="people-list"></div>
     </aside>
 
     <section class="workspace">
-      <div id="managerBar" class="manager-bar hidden">
+      <div id="managerBar" class="manager-bar">
         <div>
-          <div class="manager-name" id="managerName">—</div>
-          <div class="manager-sub" id="managerSub">Выбери менеджера слева</div>
+          <div class="manager-name" id="managerName">Вся команда</div>
+          <div class="manager-sub" id="managerSub">Выбери человека слева или пиши задачу ниже</div>
         </div>
         <form id="quickAdd" class="quick-add">
-          <input name="title" placeholder="Новая задача этому менеджеру…" required autocomplete="off" />
-          <button type="submit">Добавить</button>
+          <select id="assignTo" name="assign_to" title="Кому задача">
+            <option value="selected">Выбранному</option>
+            <option value="me">Себе</option>
+            <option value="boss">Владельцу</option>
+          </select>
+          <input name="title" placeholder="Текст задачи…" required autocomplete="off" />
+          <button type="submit">Назначить</button>
         </form>
       </div>
       <main id="board" class="board"></main>
-      <p id="emptyHint" class="empty-hint hidden">У этого менеджера пока нет задач. Напиши сверху и нажми «Добавить».</p>
+      <p id="emptyHint" class="empty-hint hidden">Пока пусто — напиши задачу сверху.</p>
     </section>
   </div>
-
-  <dialog id="dlg">
-    <form method="dialog" id="dlgForm">
-      <h3 id="dlgTitle">Новая задача</h3>
-      <label>Название <input name="title" required /></label>
-      <label>Описание <textarea name="description" rows="3"></textarea></label>
-      <label>Проект
-        <select name="project_id" id="dlgProject"></select>
-      </label>
-      <label>Исполнитель
-        <select name="assignee_id" id="dlgAssignee"></select>
-      </label>
-      <label>Тип
-        <select name="kind">
-          <option value="once">Разовая</option>
-          <option value="weekly">Еженедельная</option>
-        </select>
-      </label>
-      <label>Дни (1=пн…7=вс) <input name="weekdays" placeholder="1,3,5" /></label>
-      <label>Время уведомления <input name="notify_time" value="09:00" /></label>
-      <menu>
-        <button value="cancel" type="submit">Отмена</button>
-        <button id="dlgSave" value="default" type="submit">Сохранить</button>
-      </menu>
-    </form>
-  </dialog>
 
   <script src="/static/app.js"></script>
 </body>
