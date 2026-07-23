@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -10,7 +10,8 @@ from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.db import get_session
-from app.models import Employee, Project, Task, TaskRun
+from app.models import Employee, Project, Task
+from app.notify import notify_task_assignee
 from app.schemas import (
     BoardOut,
     EmployeeIn,
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-def _task_out(task: Task) -> TaskOut:
+def _task_out(task: Task, *, notified: bool | None = None, notify_error: str | None = None) -> TaskOut:
     return TaskOut(
         id=task.id,
         title=task.title,
@@ -43,48 +44,23 @@ def _task_out(task: Task) -> TaskOut:
         assignee_name=task.assignee.name if task.assignee else None,
         project_name=task.project.name if task.project else None,
         created_by_name=task.created_by.name if task.created_by else None,
+        notified=notified,
+        notify_error=notify_error,
     )
 
 
-async def _ensure_run(session: AsyncSession, task_id: int, due: date) -> TaskRun:
-    existing = await session.scalar(
-        select(TaskRun).where(TaskRun.task_id == task_id, TaskRun.due_date == due)
-    )
-    if existing:
-        return existing
-    run = TaskRun(task_id=task_id, due_date=due, status="pending")
-    session.add(run)
-    await session.commit()
-    await session.refresh(run)
-    return run
-
-
-async def _notify_assignee(request: Request, session: AsyncSession, task: Task) -> None:
-    bot = getattr(request.app.state, "bot", None)
-    if not bot or not task.assignee:
-        return
-    settings = get_settings()
-    due = datetime.now(settings.tz).date()
-    run = await _ensure_run(session, task.id, due)
-    author = task.created_by.name if task.created_by else "кто-то"
-    text = (
-        f"📋 Новая задача от <b>{author}</b>\n"
-        f"<b>{task.title}</b>\n\n"
-        "Жми «Сделано», когда выполнишь."
-    )
-    try:
-        from app.bot import done_kb
-
-        await bot.send_message(
-            task.assignee.telegram_id,
-            text,
-            reply_markup=done_kb(run.id),
-            parse_mode="HTML",
+async def _load_task(session: AsyncSession, task_id: int) -> Task:
+    return (
+        await session.scalars(
+            select(Task)
+            .where(Task.id == task_id)
+            .options(
+                selectinload(Task.assignee),
+                selectinload(Task.project),
+                selectinload(Task.created_by),
+            )
         )
-        run.notified_at = datetime.utcnow()
-        await session.commit()
-    except Exception:  # noqa: BLE001
-        logger.exception("web notify failed task=%s", task.id)
+    ).one()
 
 
 @router.get("/board", response_model=BoardOut)
@@ -151,6 +127,7 @@ async def create_task(
     session: AsyncSession = Depends(get_session),
 ) -> TaskOut:
     settings = get_settings()
+    now_hm = datetime.now(settings.tz).strftime("%H:%M")
     task = Task(
         title=body.title,
         description=body.description,
@@ -160,36 +137,47 @@ async def create_task(
         status=body.status,
         kind=body.kind,
         weekdays=body.weekdays,
-        notify_time=body.notify_time or datetime.now(settings.tz).strftime("%H:%M"),
+        notify_time=body.notify_time or now_hm,
         created_at=datetime.utcnow(),
     )
     session.add(task)
     await session.commit()
-    task = (
-        await session.scalars(
-            select(Task)
-            .where(Task.id == task.id)
-            .options(
-                selectinload(Task.assignee),
-                selectinload(Task.project),
-                selectinload(Task.created_by),
-            )
-        )
-    ).one()
+    task = await _load_task(session, task.id)
+
+    notified: bool | None = None
+    notify_error: str | None = None
     if body.notify_now and body.kind == "once":
-        await _notify_assignee(request, session, task)
-        task = (
-            await session.scalars(
-                select(Task)
-                .where(Task.id == task.id)
-                .options(
-                    selectinload(Task.assignee),
-                    selectinload(Task.project),
-                    selectinload(Task.created_by),
-                )
-            )
-        ).one()
-    return _task_out(task)
+        bot = getattr(request.app.state, "bot", None)
+        notified, notify_error = await notify_task_assignee(
+            bot=bot,
+            session=session,
+            task=task,
+            due=datetime.now(settings.tz).date(),
+        )
+        task = await _load_task(session, task.id)
+    return _task_out(task, notified=notified, notify_error=notify_error)
+
+
+@router.post("/tasks/{task_id}/notify", response_model=TaskOut)
+async def retry_notify(
+    task_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> TaskOut:
+    settings = get_settings()
+    task = await session.get(Task, task_id)
+    if not task or not task.active:
+        raise HTTPException(404, "Task not found")
+    task = await _load_task(session, task_id)
+    bot = getattr(request.app.state, "bot", None)
+    notified, notify_error = await notify_task_assignee(
+        bot=bot,
+        session=session,
+        task=task,
+        due=datetime.now(settings.tz).date(),
+    )
+    task = await _load_task(session, task_id)
+    return _task_out(task, notified=notified, notify_error=notify_error)
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskOut)
@@ -203,17 +191,7 @@ async def patch_task(
     for key, value in data.items():
         setattr(task, key, value)
     await session.commit()
-    task = (
-        await session.scalars(
-            select(Task)
-            .where(Task.id == task_id)
-            .options(
-                selectinload(Task.assignee),
-                selectinload(Task.project),
-                selectinload(Task.created_by),
-            )
-        )
-    ).one()
+    task = await _load_task(session, task_id)
     return _task_out(task)
 
 

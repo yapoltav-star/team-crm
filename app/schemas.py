@@ -77,6 +77,8 @@ class TaskOut(BaseModel):
     assignee_name: str | None = None
     project_name: str | None = None
     created_by_name: str | None = None
+    notified: bool | None = None
+    notify_error: str | None = None
 
     model_config = {"from_attributes": True}
 

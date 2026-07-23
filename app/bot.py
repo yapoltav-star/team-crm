@@ -7,13 +7,14 @@ from datetime import date, datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.config import Settings
 from app.models import Employee, Task, TaskRun
+from app.notify import done_kb, ensure_run, notify_task_assignee
 
 logger = logging.getLogger("crm-bot")
 
@@ -26,12 +27,6 @@ def _session(proxy: str | None) -> AiohttpSession:
     if isinstance(init, dict):
         init["family"] = socket.AF_INET
     return session
-
-
-def done_kb(run_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="✅ Сделано", callback_data=f"done:{run_id}")]]
-    )
 
 
 async def ensure_owner(session: AsyncSession, owner_id: int) -> Employee:
@@ -48,19 +43,6 @@ async def ensure_owner(session: AsyncSession, owner_id: int) -> Employee:
     return emp
 
 
-async def _ensure_run(session: AsyncSession, task_id: int, due: date) -> TaskRun:
-    existing = await session.scalar(
-        select(TaskRun).where(TaskRun.task_id == task_id, TaskRun.due_date == due)
-    )
-    if existing:
-        return existing
-    run = TaskRun(task_id=task_id, due_date=due, status="pending")
-    session.add(run)
-    await session.commit()
-    await session.refresh(run)
-    return run
-
-
 async def create_and_notify(
     *,
     session: AsyncSession,
@@ -72,7 +54,7 @@ async def create_and_notify(
     kind: str = "once",
     weekdays: str = "",
     notify_time: str | None = None,
-) -> Task:
+) -> tuple[Task, bool, str | None]:
     task = Task(
         title=title,
         assignee_id=assignee.id,
@@ -84,28 +66,31 @@ async def create_and_notify(
     )
     session.add(task)
     await session.commit()
-    await session.refresh(task)
-
-    if kind == "once":
-        run = await _ensure_run(session, task.id, datetime.now(settings.tz).date())
-        text = (
-            f"📋 Новая задача от <b>{author.name}</b>\n"
-            f"<b>{title}</b>\n\n"
-            "Жми «Сделано», когда выполнишь."
+    task = (
+        await session.scalars(
+            select(Task)
+            .where(Task.id == task.id)
+            .options(selectinload(Task.assignee), selectinload(Task.created_by))
         )
-        try:
-            await bot.send_message(
-                assignee.telegram_id,
-                text,
-                reply_markup=done_kb(run.id),
-                parse_mode="HTML",
-            )
-            run.notified_at = datetime.utcnow()
-            await session.commit()
-        except Exception:  # noqa: BLE001
-            logger.exception("send task failed")
-    return task
+    ).one()
 
+    ok, err = True, None
+    if kind == "once":
+        ok, err = await notify_task_assignee(
+            bot=bot,
+            session=session,
+            task=task,
+            due=datetime.now(settings.tz).date(),
+        )
+        if not ok and err:
+            logger.warning("bot notify failed: %s", err)
+    return task, ok, err
+
+async def _reply_created(message: Message, ok: bool, err: str | None, ok_text: str) -> None:
+    if ok:
+        await message.answer(ok_text)
+    else:
+        await message.answer(ok_text + "\n\n⚠️ В Telegram не ушло: " + (err or "неизвестно"))
 
 async def materialize_and_notify(
     session_factory: async_sessionmaker[AsyncSession],
@@ -125,7 +110,7 @@ async def materialize_and_notify(
         for task in weekly:
             days = [int(x) for x in (task.weekdays or "").split(",") if x.strip().isdigit()]
             if weekday in days:
-                await _ensure_run(session, task.id, today)
+                await ensure_run(session, task.id, today)
 
         runs = (
             await session.scalars(
@@ -253,7 +238,7 @@ def build_dispatcher(
             if not author:
                 await message.answer("Нет доступа.")
                 return
-            await create_and_notify(
+            _, ok, err = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -261,7 +246,7 @@ def build_dispatcher(
                 assignee=author,
                 author=author,
             )
-        await message.answer("Задача себе создана.")
+        await _reply_created(message, ok, err, "Задача себе создана.")
 
     @dp.message(Command("boss"))
     async def cmd_boss(message: Message, command: CommandObject) -> None:
@@ -275,7 +260,7 @@ def build_dispatcher(
             if not author:
                 await message.answer("Нет доступа.")
                 return
-            await create_and_notify(
+            _, ok, err = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -283,7 +268,7 @@ def build_dispatcher(
                 assignee=owner,
                 author=author,
             )
-        await message.answer("Задача отправлена владельцу.")
+        await _reply_created(message, ok, err, "Задача отправлена владельцу.")
 
     @dp.message(Command("for"))
     async def cmd_for(message: Message, command: CommandObject) -> None:
@@ -304,7 +289,7 @@ def build_dispatcher(
             if not assignee:
                 await message.answer("Человек не найден в CRM. Сначала /add_manager.")
                 return
-            await create_and_notify(
+            _, ok, err = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -312,7 +297,7 @@ def build_dispatcher(
                 assignee=assignee,
                 author=author,
             )
-        await message.answer(f"Задача отправлена: {title}")
+        await _reply_created(message, ok, err, f"Задача отправлена: {title}")
 
     @dp.message(Command("my"))
     async def cmd_my(message: Message) -> None:
@@ -386,7 +371,7 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Сначала /add_manager")
                 return
-            await create_and_notify(
+            _, ok, err = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -394,7 +379,7 @@ def build_dispatcher(
                 assignee=emp,
                 author=author,
             )
-        await message.answer("Задача создана и отправлена.")
+        await _reply_created(message, ok, err, "Задача создана и отправлена.")
 
     @dp.message(Command("weekly"))
     async def weekly_task(message: Message, command: CommandObject) -> None:
@@ -531,7 +516,7 @@ def build_dispatcher(
                             f"Не понял, кому задача («{token}»). Назови имя из команды или скажи «себе»/«боссу»."
                         )
                         return
-                    await create_and_notify(
+                    _, ok, err = await create_and_notify(
                         session=session,
                         bot=message.bot,
                         settings=settings,
@@ -539,7 +524,10 @@ def build_dispatcher(
                         assignee=assignee,
                         author=author,
                     )
-                    await wait.edit_text(f"Готово: задача для {assignee.name}\n«{title}»")
+                    text = f"Готово: задача для {assignee.name}\n«{title}»"
+                    if not ok:
+                        text += f"\n\n⚠️ В Telegram не ушло: {err or 'неизвестно'}"
+                    await wait.edit_text(text)
                     return
                 if action == "list_my_tasks":
                     tasks = (

@@ -271,7 +271,7 @@ $("#quickAdd").addEventListener("submit", async (e) => {
     }
     const assigneeId = resolveAssigneeId($("#assignTo").value);
     const projectId = $("#projectFilter").value;
-    await api("/api/tasks", {
+    const created = await api("/api/tasks", {
       method: "POST",
       body: JSON.stringify({
         title,
@@ -281,13 +281,23 @@ $("#quickAdd").addEventListener("submit", async (e) => {
         created_by_id: Number(state.meId),
         kind: "once",
         weekdays: "",
-        notify_time: "09:00",
         status: "todo",
         notify_now: true,
       }),
     });
     input.value = "";
     await load();
+    if (created && created.notified === false) {
+      const retry = confirm(
+        (created.notify_error || "В Telegram не ушло.") +
+          "\n\nЧаще всего менеджер ещё не нажал /start у бота.\nПовторить отправку сейчас?"
+      );
+      if (retry && created.id) {
+        const again = await api(`/api/tasks/${created.id}/notify`, { method: "POST" });
+        if (again?.notified) alert("Отправлено в Telegram ✅");
+        else alert(again?.notify_error || "Снова не ушло — пусть напишет боту /start");
+      }
+    }
   } catch (err) {
     alert(err.message || String(err));
   }
@@ -304,6 +314,10 @@ $("#btnNewManager").addEventListener("click", async () => {
   const name = prompt("Имя менеджера:");
   const tid = prompt("Telegram numeric id:");
   if (!name || !tid) return;
+  if (!/^\d+$/.test(String(tid).trim())) {
+    alert("Telegram id должен быть числом (как в @userinfobot)");
+    return;
+  }
   const emp = await api("/api/employees", {
     method: "POST",
     body: JSON.stringify({ name, telegram_id: Number(tid), role: "manager" }),
@@ -311,6 +325,9 @@ $("#btnNewManager").addEventListener("click", async () => {
   await load();
   state.selectedPersonId = emp.id;
   render();
+  alert(
+    `${name} добавлен(а).\n\nВажно: пусть откроет вашего бота в Telegram и нажмёт /start — иначе задачи не дойдут.`
+  );
 });
 
 load().catch((err) => {
