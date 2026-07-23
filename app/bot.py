@@ -92,6 +92,70 @@ async def _reply_created(message: Message, ok: bool, err: str | None, ok_text: s
     else:
         await message.answer(ok_text + "\n\n⚠️ В Telegram не ушло: " + (err or "неизвестно"))
 
+
+STATUS_RU = {"todo": "к выполнению", "doing": "в работе", "done": "сделано"}
+
+
+async def format_open_tasks(
+    session: AsyncSession,
+    *,
+    people: list[Employee] | None = None,
+    assignee: Employee | None = None,
+) -> str:
+    """Open tasks for one person or the whole team."""
+    q = (
+        select(Task)
+        .where(Task.active.is_(True), Task.status != "done")
+        .options(selectinload(Task.assignee), selectinload(Task.created_by))
+        .order_by(Task.status, Task.id)
+    )
+    if assignee is not None:
+        q = q.where(Task.assignee_id == assignee.id)
+    tasks = (await session.scalars(q)).all()
+
+    if assignee is not None:
+        if not tasks:
+            return f"У {assignee.name} открытых задач нет."
+        lines = [f"Задачи — {assignee.name}:"]
+        for t in tasks:
+            st = STATUS_RU.get(t.status, t.status)
+            author = f" (от {t.created_by.name})" if t.created_by else ""
+            lines.append(f"• {t.title} — {st}{author}")
+        return "\n".join(lines)
+
+    team = people or []
+    by_id: dict[int, list[Task]] = {}
+    for t in tasks:
+        if t.assignee_id is None:
+            continue
+        by_id.setdefault(t.assignee_id, []).append(t)
+
+    if not team and not by_id:
+        return "Открытых задач пока нет."
+
+    blocks: list[str] = ["Кто чем занят:"]
+    ordered = sorted(team, key=lambda e: (e.role != "owner", e.name.lower()))
+    seen: set[int] = set()
+    for emp in ordered:
+        seen.add(emp.id)
+        items = by_id.get(emp.id, [])
+        if not items:
+            blocks.append(f"\n{emp.name}: —")
+            continue
+        blocks.append(f"\n{emp.name} ({len(items)}):")
+        for t in items:
+            st = STATUS_RU.get(t.status, t.status)
+            blocks.append(f"• {t.title} — {st}")
+    for emp_id, items in by_id.items():
+        if emp_id in seen:
+            continue
+        name = items[0].assignee.name if items[0].assignee else f"#{emp_id}"
+        blocks.append(f"\n{name} ({len(items)}):")
+        for t in items:
+            st = STATUS_RU.get(t.status, t.status)
+            blocks.append(f"• {t.title} — {st}")
+    return "\n".join(blocks)
+
 async def materialize_and_notify(
     session_factory: async_sessionmaker[AsyncSession],
     bot: Bot,
@@ -191,11 +255,13 @@ def build_dispatcher(
 
     help_common = (
         "Можно писать обычным текстом или голосом.\n"
+        "Например: «у кого какие задачи», «что у Ивана».\n"
         "Команды:\n"
         "/todo текст — себе\n"
         "/boss текст — владельцу\n"
         "/for <id> | текст — человеку\n"
         "/my — мои открытые\n"
+        "/team — у кого что\n"
     )
 
     @dp.message(CommandStart())
@@ -308,20 +374,23 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Нет доступа.")
                 return
-            tasks = (
-                await session.scalars(
-                    select(Task).where(
-                        Task.assignee_id == emp.id,
-                        Task.active.is_(True),
-                        Task.status != "done",
-                    )
-                )
-            ).all()
-        if not tasks:
-            await message.answer("Открытых задач нет.")
+            text = await format_open_tasks(session, assignee=emp)
+        await message.answer(text)
+
+    @dp.message(Command("team"))
+    async def cmd_team(message: Message) -> None:
+        if not message.from_user:
             return
-        lines = [f"• {t.title} [{t.status}]" for t in tasks]
-        await message.answer("Твои задачи:\n" + "\n".join(lines))
+        async with session_factory() as session:
+            emp = await _author(session, message.from_user.id)
+            if not emp:
+                await message.answer("Нет доступа.")
+                return
+            people = (
+                await session.scalars(select(Employee).where(Employee.active.is_(True)))
+            ).all()
+            text = await format_open_tasks(session, people=list(people))
+        await message.answer(text)
 
     @dp.message(Command("add_manager"))
     async def add_manager(message: Message, command: CommandObject) -> None:
@@ -497,11 +566,13 @@ def build_dispatcher(
                 ).all()
                 from app.nlp import parse_intent
 
+                is_owner = message.from_user.id == settings.owner_telegram_id
                 intent = await parse_intent(
                     settings,
                     text=text,
                     author_name=author.name,
                     people=[{"name": p.name, "role": p.role} for p in people],
+                    is_owner=is_owner,
                 )
                 action = intent.get("action")
                 if action == "create_task":
@@ -529,27 +600,32 @@ def build_dispatcher(
                         text += f"\n\n⚠️ В Telegram не ушло: {err or 'неизвестно'}"
                     await wait.edit_text(text)
                     return
-                if action == "list_my_tasks":
-                    tasks = (
-                        await session.scalars(
-                            select(Task).where(
-                                Task.assignee_id == author.id,
-                                Task.active.is_(True),
-                                Task.status != "done",
-                            )
-                        )
-                    ).all()
-                    if not tasks:
-                        await wait.edit_text("Открытых задач нет.")
+                if action in {"list_my_tasks", "list_tasks"}:
+                    who = str(intent.get("who") or "me").strip()
+                    if action == "list_my_tasks":
+                        who = "me"
+                    who_l = who.lower()
+                    if who_l in {"all", "team", "все", "команда", "всех", "у всех", "статус"}:
+                        report = await format_open_tasks(session, people=list(people))
+                        await wait.edit_text(report)
                         return
-                    lines = [f"• {t.title} [{t.status}]" for t in tasks]
-                    await wait.edit_text("Твои задачи:\n" + "\n".join(lines))
+                    if who_l in {"me", "себе", "мне", "я", "мои"}:
+                        report = await format_open_tasks(session, assignee=author)
+                        await wait.edit_text(report)
+                        return
+                    person = _match_assignee(list(people), who, author)
+                    if not person:
+                        await wait.edit_text(
+                            f"Не нашёл «{who}» в команде. Спроси «у кого какие задачи» или назови имя точно."
+                        )
+                        return
+                    report = await format_open_tasks(session, assignee=person)
+                    await wait.edit_text(report)
                     return
                 if action == "help":
                     await wait.edit_text(help_common)
                     return
-                await wait.edit_text(str(intent.get("reply") or help_common))
-        except Exception as exc:  # noqa: BLE001
+                await wait.edit_text(str(intent.get("reply") or help_common))        except Exception as exc:  # noqa: BLE001
             logger.exception("nlp failed")
             await wait.edit_text(f"Не смог разобрать: {exc}")
 

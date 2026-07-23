@@ -33,8 +33,30 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "list_tasks",
+            "description": (
+                "Показать открытые задачи. "
+                "who=me — мои; who=all — у всей команды (кто чем занят); "
+                "who=<имя> — задачи конкретного человека. "
+                "Используй для вопросов: у кого какие задачи, что у Ивана, статус команды."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "who": {
+                        "type": "string",
+                        "description": "me | all | имя сотрудника",
+                    },
+                },
+                "required": ["who"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_my_tasks",
-            "description": "Показать открытые задачи автора",
+            "description": "Синоним list_tasks с who=me",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -62,13 +84,18 @@ async def parse_intent(
     text: str,
     author_name: str,
     people: list[dict[str, str]],
+    is_owner: bool = False,
 ) -> dict[str, Any]:
     names = ", ".join(f"{p['name']} ({p['role']})" for p in people) or "пока никого"
+    role = "владелец (видит всю команду)" if is_owner else "сотрудник (свои задачи + можно спросить по имени)"
     system = (
-        "Ты ассистент CRM в Telegram. Пользователь пишет текстом или голосом.\n"
-        f"Автор: {author_name}. Сотрудники: {names}.\n"
-        "Создать задачу → tool create_task (assignee=me|boss|имя).\n"
-        "Список задач → list_my_tasks. Иначе короткий ответ."
+        "Ты ассистент task-CRM в Telegram. Пользователь пишет текстом или голосом.\n"
+        f"Автор: {author_name} — {role}. Сотрудники: {names}.\n"
+        "Создать задачу → create_task (assignee=me|boss|имя).\n"
+        "Спросить задачи / кто чем занят / у кого что → list_tasks "
+        "(who=all для всей команды, who=имя, who=me для своих).\n"
+        "Не выдумывай задачи — только вызывай tool, данные подтянет система.\n"
+        "Иначе короткий ответ."
     )
     client = _client(settings)
     response = await client.chat.completions.create(
