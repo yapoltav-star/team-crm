@@ -47,17 +47,19 @@ async def ensure_member(
     create_if_missing: bool = True,
 ) -> Employee | None:
     tid = int(user.id)
+    name = _tg_name(user)
     if tid == int(settings.owner_telegram_id):
-        return await ensure_owner(session, tid)
+        return await ensure_owner(session, tid, display_name=name)
 
     emp = await find_employee(session, tid)
-    name = _tg_name(user)
     if emp:
         emp.active = True
         # подтянуть имя из Telegram, если в CRM ещё заглушка
-        if not emp.name or emp.name.startswith("User ") or emp.name == "Владелец":
-            if emp.role != "owner":
-                emp.name = name
+        if not emp.name or emp.name.startswith("User ") or emp.name.strip().lower() in {
+            "владелец",
+            "owner",
+        }:
+            emp.name = name
         await session.commit()
         return emp
 
@@ -82,16 +84,28 @@ def _session(proxy: str | None) -> AiohttpSession:
     return session
 
 
-async def ensure_owner(session: AsyncSession, owner_id: int) -> Employee:
+async def ensure_owner(
+    session: AsyncSession,
+    owner_id: int,
+    display_name: str | None = None,
+) -> Employee:
     tid = int(owner_id)
     emp = await find_employee(session, tid)
+    placeholder = {"владелец", "owner", ""}
     if emp:
         emp.role = "owner"
         emp.active = True
         emp.telegram_id = tid
+        if display_name and (not emp.name or emp.name.strip().lower() in placeholder):
+            emp.name = display_name[:200]
         await session.commit()
         return emp
-    emp = Employee(telegram_id=tid, name="Владелец", role="owner", active=True)
+    emp = Employee(
+        telegram_id=tid,
+        name=(display_name or "Ярослав")[:200],
+        role="owner",
+        active=True,
+    )
     session.add(emp)
     await session.commit()
     await session.refresh(emp)
@@ -317,6 +331,7 @@ def build_dispatcher(
         "/for <id> | текст — человеку\n"
         "/my — мои открытые\n"
         "/team — у кого что\n"
+        "/name Имя — как тебя зовут в CRM\n"
     )
 
     @dp.message(CommandStart())
@@ -453,6 +468,21 @@ def build_dispatcher(
             text = await format_open_tasks(session, people=list(people))
         await message.answer(text)
 
+    @dp.message(Command("name"))
+    async def cmd_name(message: Message, command: CommandObject) -> None:
+        new_name = (command.args or "").strip()
+        if not new_name or not message.from_user:
+            await message.answer("Формат: /name Ярослав")
+            return
+        async with session_factory() as session:
+            emp = await _author(session, message.from_user)
+            if not emp:
+                await message.answer("Сначала /start")
+                return
+            emp.name = new_name[:200]
+            await session.commit()
+        await message.answer(f"Ок, в CRM ты теперь: {new_name}")
+
     @dp.message(Command("add_manager"))
     async def add_manager(message: Message, command: CommandObject) -> None:
         if not message.from_user or message.from_user.id != settings.owner_telegram_id:
@@ -465,13 +495,17 @@ def build_dispatcher(
         async with session_factory() as session:
             tid = int(parts[0])
             name = parts[1].strip()
-            emp = await session.scalar(select(Employee).where(Employee.telegram_id == tid))
+            emp = await find_employee(session, tid)
             if emp:
                 emp.name = name
-                emp.role = "manager"
+                if tid != int(settings.owner_telegram_id):
+                    emp.role = "manager"
+                else:
+                    emp.role = "owner"
                 emp.active = True
             else:
-                session.add(Employee(telegram_id=tid, name=name, role="manager"))
+                role = "owner" if tid == int(settings.owner_telegram_id) else "manager"
+                session.add(Employee(telegram_id=tid, name=name, role=role))
             await session.commit()
         await message.answer(f"Менеджер {parts[1]} добавлен.")
         try:

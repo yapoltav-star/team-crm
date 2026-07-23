@@ -16,6 +16,7 @@ from app.schemas import (
     BoardOut,
     EmployeeIn,
     EmployeeOut,
+    EmployeePatch,
     ProjectIn,
     ProjectOut,
     TaskIn,
@@ -105,16 +106,38 @@ async def create_project(body: ProjectIn, session: AsyncSession = Depends(get_se
 async def create_employee(
     body: EmployeeIn, session: AsyncSession = Depends(get_session)
 ) -> EmployeeOut:
+    settings = get_settings()
     existing = await session.scalar(select(Employee).where(Employee.telegram_id == body.telegram_id))
     if existing:
-        existing.name = body.name
-        existing.role = body.role
+        existing.name = body.name.strip()[:200]
+        # не понижать владельца до менеджера при смене имени с сайта
+        if int(existing.telegram_id) == int(settings.owner_telegram_id) or existing.role == "owner":
+            existing.role = "owner"
+        else:
+            existing.role = body.role
         existing.active = True
         await session.commit()
         await session.refresh(existing)
         return EmployeeOut.model_validate(existing)
-    emp = Employee(telegram_id=body.telegram_id, name=body.name, role=body.role)
+    role = body.role
+    if int(body.telegram_id) == int(settings.owner_telegram_id):
+        role = "owner"
+    emp = Employee(telegram_id=body.telegram_id, name=body.name.strip()[:200], role=role)
     session.add(emp)
+    await session.commit()
+    await session.refresh(emp)
+    return EmployeeOut.model_validate(emp)
+
+
+@router.patch("/employees/{employee_id}", response_model=EmployeeOut)
+async def patch_employee(
+    employee_id: int, body: EmployeePatch, session: AsyncSession = Depends(get_session)
+) -> EmployeeOut:
+    emp = await session.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(404, "Employee not found")
+    if body.name is not None and body.name.strip():
+        emp.name = body.name.strip()[:200]
     await session.commit()
     await session.refresh(emp)
     return EmployeeOut.model_validate(emp)

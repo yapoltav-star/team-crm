@@ -11,6 +11,10 @@ class EmployeeIn(BaseModel):
     role: str = "manager"
 
 
+class EmployeePatch(BaseModel):
+    name: str | None = None
+
+
 class EmployeeOut(BaseModel):
     id: int
     telegram_id: int

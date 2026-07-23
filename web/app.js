@@ -270,10 +270,37 @@ $("#btnLogin").addEventListener("click", async () => {
         role: "manager",
       }),
     });
+  } else if (!emp.name || /^(владелец|owner)$/i.test(emp.name)) {
+    const name = prompt("Как тебя зовут в CRM?", "Ярослав");
+    if (name && name.trim()) {
+      emp = await api(`/api/employees/${emp.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: name.trim() }),
+      });
+    }
   }
   state.meId = emp.id;
   localStorage.setItem("crm_me_id", String(emp.id));
   await load();
+});
+
+$("#btnRename").addEventListener("click", async () => {
+  if (!state.meId) {
+    alert("Сначала нажми «Войти»");
+    return;
+  }
+  const current = me()?.name || "";
+  const name = prompt("Как тебя зовут в CRM?", current || "Ярослав");
+  if (!name || !name.trim()) return;
+  try {
+    await api(`/api/employees/${state.meId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    await load();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
 });
 
 $("#quickAdd").addEventListener("submit", async (e) => {
