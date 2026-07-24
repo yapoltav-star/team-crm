@@ -32,6 +32,7 @@ async def init_db() -> None:
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INTEGER",
             "ALTER TABLE employees ALTER COLUMN telegram_id TYPE BIGINT",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_group VARCHAR(100) DEFAULT ''",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS job_title VARCHAR(80) DEFAULT ''",
             """
             CREATE TABLE IF NOT EXISTS employee_access (
                 id SERIAL PRIMARY KEY,

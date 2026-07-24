@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.catalog import load_catalog
 from app.config import get_settings
 from app.db import SessionLocal, get_session
+from app.job_titles import JOB_TITLE_SET
 from app.models import (
     Employee,
     EmployeeAccess,
@@ -70,6 +71,7 @@ async def _employee_out(session: AsyncSession, emp: Employee) -> EmployeeOut:
         telegram_id=emp.telegram_id,
         name=emp.name,
         role=emp.role,
+        job_title=emp.job_title or "",
         team_group=emp.team_group or "",
         active=emp.active,
         can_see_ids=await _can_see_ids(session, emp.id),
@@ -358,7 +360,8 @@ async def patch_employee(
         actor = await session.get(Employee, body.actor_id)
 
     needs_owner = (
-        body.team_group is not None
+        body.job_title is not None
+        or body.team_group is not None
         or body.can_see_ids is not None
         or body.active is not None
     )
@@ -370,6 +373,11 @@ async def patch_employee(
             if not actor or actor.role != "owner":
                 raise HTTPException(403, "Нельзя менять чужое имя")
         emp.name = body.name.strip()[:200]
+    if body.job_title is not None:
+        title = body.job_title.strip()
+        if title and title not in JOB_TITLE_SET:
+            raise HTTPException(400, f"Неизвестная роль. Доступны: {', '.join(sorted(JOB_TITLE_SET))}")
+        emp.job_title = title
     if body.team_group is not None:
         emp.team_group = body.team_group.strip()[:100]
     if body.active is not None:

@@ -13,6 +13,7 @@ class EmployeeIn(BaseModel):
 
 class EmployeePatch(BaseModel):
     name: str | None = None
+    job_title: str | None = None
     team_group: str | None = None
     can_see_ids: list[int] | None = None
     active: bool | None = None
@@ -33,6 +34,7 @@ class EmployeeOut(BaseModel):
     telegram_id: int
     name: str
     role: str
+    job_title: str = ""
     team_group: str = ""
     active: bool
     can_see_ids: list[int] = Field(default_factory=list)

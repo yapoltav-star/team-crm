@@ -21,6 +21,17 @@ const REC_LABELS = {
   month_days: "По числам месяца",
 };
 
+const JOB_TITLES = [
+  "поддержка",
+  "менеджер",
+  "склад",
+  "партнер",
+  "рук",
+  "менеджер по китаю",
+];
+
+const JOB_TITLE_ORDER = Object.fromEntries(JOB_TITLES.map((t, i) => [t, i]));
+
 const state = {
   view: localStorage.getItem("crm_view") || "home",
   board: null,
@@ -186,13 +197,26 @@ function visiblePeople() {
 function peopleGroups(list) {
   const map = new Map();
   for (const e of list) {
-    const g = String(e.team_group || "").trim() || "Без группы";
+    let g;
+    if (e.role === "owner") g = "Владелец";
+    else {
+      const title = String(e.job_title || "").trim();
+      const group = String(e.team_group || "").trim();
+      g = title || group || "Без роли";
+    }
     if (!map.has(g)) map.set(g, []);
     map.get(g).push(e);
   }
   return [...map.entries()].sort((a, b) => {
-    if (a[0] === "Без группы") return 1;
-    if (b[0] === "Без группы") return -1;
+    if (a[0] === "Владелец") return -1;
+    if (b[0] === "Владелец") return 1;
+    if (a[0] === "Без роли") return 1;
+    if (b[0] === "Без роли") return -1;
+    const ai = JOB_TITLE_ORDER[a[0]];
+    const bi = JOB_TITLE_ORDER[b[0]];
+    if (ai != null || bi != null) {
+      return (ai ?? 99) - (bi ?? 99) || a[0].localeCompare(b[0], "ru");
+    }
     return a[0].localeCompare(b[0], "ru");
   });
 }
@@ -226,7 +250,12 @@ function renderPeople() {
     title.className = "people-group-title";
     title.textContent = groupName;
     head.appendChild(title);
-    if (owner && groupName !== "Без группы") {
+    if (
+      owner &&
+      groupName !== "Без роли" &&
+      groupName !== "Владелец" &&
+      JOB_TITLE_ORDER[groupName] == null
+    ) {
       const editGrp = document.createElement("button");
       editGrp.type = "button";
       editGrp.className = "ghost people-group-edit";
@@ -242,14 +271,17 @@ function renderPeople() {
       row.className =
         "person" + (String(state.selectedPersonId) === String(m.id) ? " active" : "");
       const open = openCount(m.id);
-      const role = m.role === "owner" ? "владелец" : "менеджер";
+      const roleLabel =
+        m.role === "owner"
+          ? "владелец"
+          : String(m.job_title || "").trim() || "без роли";
       const main = document.createElement("button");
       main.type = "button";
       main.className = "person-main";
       main.innerHTML = `
         <span>
           <span class="person-name">${escapeHtml(m.name)}</span>
-          <span class="person-role">${role}</span>
+          <span class="person-role">${escapeHtml(roleLabel)}</span>
         </span>
         <span class="person-count">${open}</span>
       `;
@@ -282,8 +314,15 @@ function openGroupDialog(existingName) {
     alert("Только владелец может управлять группами. Нажми «Войти» своим Telegram id.");
     return;
   }
+  // Роли из списка — назначаются в карточке человека, не через «+ Группа»
+  if (JOB_TITLE_ORDER[existingName] != null) {
+    alert(
+      `«${existingName}» — это роль.\nОткрой ✎ у человека и выбери роль в списке.`
+    );
+    return;
+  }
   const form = $("#groupForm");
-  const old = existingName && existingName !== "Без группы" ? existingName : "";
+  const old = existingName && existingName !== "Без роли" ? existingName : "";
   form.elements.old_name.value = old;
   form.elements.name.value = old;
   $("#groupDlgTitle").textContent = old ? `Группа «${old}»` : "Новая группа";
@@ -312,8 +351,11 @@ function openEmployeeDialog(emp) {
   const form = $("#empForm");
   form.elements.id.value = emp.id;
   form.elements.name.value = emp.name || "";
+  form.elements.job_title.value = emp.job_title || "";
   form.elements.team_group.value = emp.team_group || "";
   $("#empDlgTitle").textContent = emp.name || "Сотрудник";
+  // владелец не меняет «должность» так же критично, но может — для единообразия
+  form.elements.job_title.disabled = false;
   const accessBox = $("#empAccessChecks");
   const accessField = accessBox?.closest("fieldset");
   if (emp.role === "owner") {
@@ -1084,6 +1126,7 @@ $("#empForm")?.addEventListener("submit", async (e) => {
   try {
     const body = {
       name: String(form.elements.name.value || "").trim(),
+      job_title: String(form.elements.job_title.value || "").trim(),
       team_group: String(form.elements.team_group.value || "").trim(),
       actor_id: state.meId,
     };

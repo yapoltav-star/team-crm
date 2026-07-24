@@ -26,7 +26,8 @@ class Employee(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
-    role: Mapped[str] = mapped_column(String(20), default="manager")  # owner|manager
+    role: Mapped[str] = mapped_column(String(20), default="manager")  # owner|manager (доступ)
+    job_title: Mapped[str] = mapped_column(String(80), default="")  # должность: склад, поддержка…
     team_group: Mapped[str] = mapped_column(String(100), default="")  # группа в «Команда»
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
