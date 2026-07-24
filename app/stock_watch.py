@@ -29,6 +29,8 @@ class CriticalSku:
     min_days: float
     recommend: int
     warehouses: int
+    ordered: int
+    buyouts: int
 
 
 def _marker(vendor_code: str) -> str:
@@ -40,8 +42,10 @@ def analyze_supply(
     *,
     target_days: int | None = None,
     min_recommend: int = 5,
+    min_orders: int = 5,
+    require_buyouts: bool = True,
 ) -> tuple[int, list[CriticalSku]]:
-    """Та же логика, что в дашборде: daysLeft по заказам, recommend к TARGET_DAYS."""
+    """Критичные остатки только по артикулам с продажами (заказы/выкупы)."""
     settings = payload.get("settings") or {}
     target = int(target_days or settings.get("target_coverage_days") or 30)
     rows = payload.get("supply_report") or []
@@ -58,23 +62,38 @@ def analyze_supply(
                 "raw_recommend": 0,
                 "min_days": None,
                 "wh": 0,
+                "ordered": 0,
+                "buyouts": 0,
             }
         if r.get("planned_supply_qty"):
             by[vc]["planned"] = int(r["planned_supply_qty"] or 0)
         period = int(r.get("period_days") or 0)
         ordered = int(r.get("ordered_qty") or 0)
+        buyout = int(r.get("buyout_qty") or 0)
         stock = int(r.get("current_stock") or 0)
-        daily = (ordered / period) if period else 0.0
-        days = (stock / daily) if daily > 0 else None
-        rec = max(0, round(daily * target - stock)) if daily > 0 else 0
+        by[vc]["ordered"] += ordered
+        by[vc]["buyouts"] += buyout
+        # скорость только там, где реально были заказы
+        if ordered <= 0 or period <= 0:
+            by[vc]["wh"] += 1
+            continue
+        daily = ordered / period
+        days = stock / daily
+        rec = max(0, round(daily * target - stock))
         by[vc]["raw_recommend"] += rec
         by[vc]["wh"] += 1
-        if days is not None:
-            prev = by[vc]["min_days"]
-            by[vc]["min_days"] = days if prev is None else min(prev, days)
+        prev = by[vc]["min_days"]
+        by[vc]["min_days"] = days if prev is None else min(prev, days)
 
     critical: list[CriticalSku] = []
     for vc, a in by.items():
+        ordered_total = int(a["ordered"] or 0)
+        buyout_total = int(a["buyouts"] or 0)
+        # без продаж / заказов — не трогаем
+        if ordered_total < max(1, min_orders):
+            continue
+        if require_buyouts and buyout_total < 1:
+            continue
         total = max(0, int(a["raw_recommend"]) - int(a["planned"] or 0))
         min_days = a["min_days"]
         if total < min_recommend:
@@ -88,9 +107,11 @@ def analyze_supply(
                 min_days=float(min_days),
                 recommend=total,
                 warehouses=int(a["wh"]),
+                ordered=ordered_total,
+                buyouts=buyout_total,
             )
         )
-    critical.sort(key=lambda x: (x.min_days, -x.recommend))
+    critical.sort(key=lambda x: (x.min_days, -x.recommend, -x.ordered))
     return target, critical
 
 
@@ -146,6 +167,8 @@ async def run_stock_watch(
         payload,
         target_days=settings.stock_target_days or None,
         min_recommend=settings.stock_min_recommend,
+        min_orders=settings.stock_min_orders,
+        require_buyouts=settings.stock_require_buyouts,
     )
     top = critical[: max(1, settings.stock_max_tasks)]
 
@@ -193,6 +216,7 @@ async def run_stock_watch(
                 f"Автозадача из WB Dashboard.\n"
                 f"Артикул: {sku.vendor_code}\n"
                 f"nm_id: {sku.nm_id or '—'}\n"
+                f"Заказы за период: {sku.ordered}, выкупы: {sku.buyouts}\n"
                 f"Мин. покрытие по складам: ~{sku.min_days:.1f} дн. "
                 f"(цель {target} дн.)\n"
                 f"Рекомендуется поставить: ~{sku.recommend} шт.\n"
@@ -260,7 +284,9 @@ async def run_stock_watch(
         if critical and bot:
             lines = [
                 f"📦 Остатки WB: критично <b>{len(critical)}</b> арт. "
-                f"(цель {target} дн., порог ≥{settings.stock_min_recommend} шт)",
+                f"с продажами (заказы ≥{settings.stock_min_orders}"
+                f"{', есть выкупы' if settings.stock_require_buyouts else ''}; "
+                f"поставить ≥{settings.stock_min_recommend})",
                 f"Создано задач: <b>{len(created)}</b>, уже были: {skipped_existing}",
                 "",
                 "Топ:",
@@ -268,7 +294,8 @@ async def run_stock_watch(
             for sku in critical[:8]:
                 lines.append(
                     f"• <code>{sku.vendor_code}</code> — "
-                    f"~{sku.min_days:.0f} дн., поставить ~{sku.recommend}"
+                    f"~{sku.min_days:.0f} дн., поставить ~{sku.recommend}, "
+                    f"заказы {sku.ordered}"
                 )
             try:
                 await bot.send_message(

@@ -146,7 +146,7 @@ async def health() -> dict:
     settings = get_settings()
     return {
         "ok": True,
-        "build": "stock-watch-2026-07-24",
+        "build": "stock-sales-only-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "stock_watch": settings.stock_watch_enabled,

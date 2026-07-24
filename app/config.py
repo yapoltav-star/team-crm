@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # 0 = брать target_coverage_days из дашборда
     stock_target_days: int = Field(default=0, alias="STOCK_TARGET_DAYS")
     stock_min_recommend: int = Field(default=5, alias="STOCK_MIN_RECOMMEND")
+    # минимум заказов за период — без продаж задачи не создаём
+    stock_min_orders: int = Field(default=5, alias="STOCK_MIN_ORDERS")
+    # требовать хотя бы 1 выкуп (реальная продажа, не только заказ)
+    stock_require_buyouts: bool = Field(default=True, alias="STOCK_REQUIRE_BUYOUTS")
     stock_max_tasks: int = Field(default=10, alias="STOCK_MAX_TASKS")
     # кому ставить задачи; 0 = владельцу
     stock_assignee_telegram_id: int = Field(default=0, alias="STOCK_ASSIGNEE_TELEGRAM_ID")
@@ -52,7 +56,12 @@ class Settings(BaseSettings):
             return ""
         return value
 
-    @field_validator("allow_self_join", "stock_watch_enabled", mode="before")
+    @field_validator(
+        "allow_self_join",
+        "stock_watch_enabled",
+        "stock_require_buyouts",
+        mode="before",
+    )
     @classmethod
     def boolish(cls, value: object) -> object:
         if isinstance(value, str):
