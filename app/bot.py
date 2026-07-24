@@ -24,7 +24,15 @@ from sqlalchemy.orm import selectinload
 
 from app.config import Settings
 from app.models import Employee, Task, TaskAssignee, TaskRun
-from app.notify import ensure_run, notify_task_assignee, resolve_run, task_action_kb
+from app.notify import (
+    ask_comment_kb,
+    ensure_run,
+    notify_task_assignee,
+    notify_task_comment,
+    resolve_run,
+    save_task_comment,
+    task_action_kb,
+)
 from app.tasks_service import resolve_due_date
 
 logger = logging.getLogger("crm-bot")
@@ -32,6 +40,28 @@ logger = logging.getLogger("crm-bot")
 
 class JoinForm(StatesGroup):
     waiting_name = State()
+
+
+class CommentForm(StatesGroup):
+    waiting = State()
+
+
+INLINE_COMMENT_RE = re.compile(
+    r"(?is)\s*(?:[,.]?\s*)?(?:и\s+)?(?:добавь|добавить)\s+комментари\w*\s*[:\-–]?\s*(.+)\s*$"
+)
+
+
+def split_task_and_comment(text: str) -> tuple[str, str | None]:
+    """Если есть «добавь комментарий …» — отделить от текста задачи."""
+    raw = (text or "").strip()
+    if not raw:
+        return "", None
+    m = INLINE_COMMENT_RE.search(raw)
+    if not m:
+        return raw, None
+    comment = (m.group(1) or "").strip()
+    task_part = raw[: m.start()].strip(" .,!—-\n\t")
+    return (task_part or raw), (comment or None)
 
 
 def join_kb(telegram_id: int) -> InlineKeyboardMarkup:
@@ -257,6 +287,63 @@ async def _reply_created(message: Message, ok: bool, err: str | None, ok_text: s
         await message.answer(ok_text)
     else:
         await message.answer(ok_text + "\n\n⚠️ В Telegram не ушло: " + (err or "неизвестно"))
+
+
+async def _load_task_for_comment(session: AsyncSession, task_id: int) -> Task | None:
+    return await session.scalar(
+        select(Task)
+        .where(Task.id == task_id, Task.active.is_(True))
+        .options(
+            selectinload(Task.assignee),
+            selectinload(Task.created_by),
+            selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+        )
+    )
+
+
+async def _attach_comment_and_notify(
+    *,
+    session: AsyncSession,
+    bot: Bot,
+    task: Task,
+    author: Employee,
+    body: str,
+) -> bool:
+    c = await save_task_comment(session, task_id=task.id, author=author, body=body)
+    if not c:
+        return False
+    # перезагрузить связи для уведомления
+    task = await _load_task_for_comment(session, task.id) or task
+    await notify_task_comment(bot=bot, task=task, author=author, body=body)
+    return True
+
+
+async def _after_task_created_comment(
+    *,
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    task: Task | None,
+    author: Employee,
+    inline_comment: str | None,
+) -> None:
+    if not task:
+        return
+    if inline_comment:
+        ok = await _attach_comment_and_notify(
+            session=session,
+            bot=message.bot,
+            task=task,
+            author=author,
+            body=inline_comment,
+        )
+        if ok:
+            await message.answer("💬 Комментарий добавлен.")
+        return
+    await message.answer(
+        "Добавить комментарий к этой задаче?",
+        reply_markup=ask_comment_kb(task.id),
+    )
 
 
 STATUS_RU = {"todo": "новая", "doing": "в работе", "done": "выполнено"}
@@ -927,7 +1014,9 @@ def build_dispatcher(
             if callback.message:
                 try:
                     await callback.message.edit_text(
-                        f"🔵 В работе: <b>{title}</b>\n\nЖми «Сделано», когда закончишь.",
+                        f"🔵 В работе: <b>{title}</b>\n\n"
+                        "Можешь написать комментарий кнопкой ниже.\n"
+                        "Жми «Сделано», когда закончишь.",
                         parse_mode="HTML",
                         reply_markup=task_action_kb(
                             run_id_final, task_id_final, status="doing"
@@ -959,6 +1048,129 @@ def build_dispatcher(
                 await callback.bot.send_message(tid, f"✅ {name} сделал(а): {title}")
             except Exception:  # noqa: BLE001
                 pass
+
+    @dp.callback_query(F.data.startswith("askc:"))
+    async def on_ask_comment(callback: CallbackQuery, state: FSMContext) -> None:
+        if not callback.data or not callback.from_user:
+            return
+        parts = callback.data.split(":")
+        if len(parts) != 3 or parts[1] not in {"yes", "no"}:
+            await callback.answer()
+            return
+        try:
+            task_id = int(parts[2])
+        except ValueError:
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        if parts[1] == "no":
+            await state.clear()
+            await callback.answer("Ок")
+            if callback.message:
+                try:
+                    await callback.message.edit_text("Ок, без комментария.")
+                except Exception:  # noqa: BLE001
+                    pass
+            return
+        await state.set_state(CommentForm.waiting)
+        await state.update_data(task_id=task_id, reason="after_create")
+        await callback.answer()
+        prompt = "Напиши комментарий одним сообщением (или /cancel)."
+        if callback.message:
+            try:
+                await callback.message.edit_text(prompt)
+            except Exception:  # noqa: BLE001
+                await callback.message.answer(prompt)
+
+    @dp.callback_query(F.data.startswith("comment:"))
+    async def on_comment_btn(callback: CallbackQuery, state: FSMContext) -> None:
+        if not callback.data or not callback.from_user:
+            return
+        parts = callback.data.split(":")
+        try:
+            run_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            task_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+        except ValueError:
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        uid = int(callback.from_user.id)
+        task_title = ""
+        task_id_final = 0
+        async with session_factory() as session:
+            run = await resolve_run(session, run_id=run_id, task_id=task_id)
+            if not run or not run.task:
+                await callback.answer("Задача не найдена", show_alert=True)
+                return
+            allowed = _task_allowed_ids(run.task)
+            creator_tid = (
+                int(run.task.created_by.telegram_id)
+                if run.task.created_by and run.task.created_by.telegram_id is not None
+                else None
+            )
+            if uid not in allowed and creator_tid != uid and uid != int(
+                settings.owner_telegram_id
+            ):
+                await callback.answer("Не твоя задача", show_alert=True)
+                return
+            task_id_final = int(run.task.id)
+            task_title = run.task.title
+        await state.set_state(CommentForm.waiting)
+        await state.update_data(task_id=task_id_final, reason="assignee")
+        await callback.answer()
+        if callback.message:
+            await callback.message.answer(
+                f"Комментарий к задаче «{task_title}».\n"
+                "Напиши текст одним сообщением (или /cancel)."
+            )
+
+    @dp.message(Command("cancel"))
+    async def cmd_cancel(message: Message, state: FSMContext) -> None:
+        cur = await state.get_state()
+        if cur == CommentForm.waiting.state:
+            await state.clear()
+            await message.answer("Отменил комментарий.")
+            return
+        await state.clear()
+        await message.answer("Ок.")
+
+    @dp.message(StateFilter(CommentForm.waiting), F.text)
+    async def on_comment_text(message: Message, state: FSMContext) -> None:
+        if not message.from_user or not message.text:
+            return
+        if message.text.startswith("/"):
+            return
+        data = await state.get_data()
+        task_id = int(data.get("task_id") or 0)
+        if not task_id:
+            await state.clear()
+            await message.answer("Не нашёл задачу для комментария.")
+            return
+        body = message.text.strip()
+        if len(body) < 1:
+            await message.answer("Пустой комментарий — напиши текст.")
+            return
+        async with session_factory() as session:
+            author = await _author(session, message.from_user)
+            if not author:
+                await state.clear()
+                await message.answer("Нет доступа.")
+                return
+            task = await _load_task_for_comment(session, task_id)
+            if not task:
+                await state.clear()
+                await message.answer("Задача уже недоступна.")
+                return
+            ok = await _attach_comment_and_notify(
+                session=session,
+                bot=message.bot,
+                task=task,
+                author=author,
+                body=body,
+            )
+        await state.clear()
+        if ok:
+            await message.answer("💬 Комментарий сохранён, уведомление отправлено.")
+        else:
+            await message.answer("Не удалось сохранить комментарий.")
 
     def _match_assignee(people: list[Employee], token: str, author: Employee) -> Employee | None:
         t = (token or "").strip().lower()
@@ -998,7 +1210,7 @@ def build_dispatcher(
         one = _match_assignee(people, token, author)
         return [one] if one else None
 
-    async def _handle_natural(message: Message, text: str) -> None:
+    async def _handle_natural(message: Message, text: str, state: FSMContext) -> None:
         if not message.from_user or not text.strip():
             return
         if not settings.nlp_enabled:
@@ -1009,6 +1221,8 @@ def build_dispatcher(
             return
         wait = await message.answer("Понял, думаю…")
         try:
+            # «добавь комментарий …» вырезаем до NLP
+            task_text, inline_comment = split_task_and_comment(text)
             async with session_factory() as session:
                 author = await _author(session, message.from_user)
                 if not author:
@@ -1028,7 +1242,7 @@ def build_dispatcher(
                     r"(?i)^\s*(?:поставь|назначь|создай)?\s*"
                     r"(?:задач[ауе]?\s+)?"
                     r"(?:всем|на\s+всех|для\s+всех|всей\s+команде)\s*[:\-]?\s*(.+)$",
-                    text.strip(),
+                    task_text.strip(),
                 )
                 if m_all and m_all.group(1).strip():
                     intent = {
@@ -1040,7 +1254,7 @@ def build_dispatcher(
                 else:
                     intent = await parse_intent(
                         settings,
-                        text=text,
+                        text=task_text,
                         author_name=author.name,
                         people=[{"name": p.name, "role": p.role} for p in people],
                         is_owner=is_owner,
@@ -1048,29 +1262,39 @@ def build_dispatcher(
                 action = intent.get("action")
                 if action == "create_task":
                     title = str(intent.get("title") or "").strip()
+                    # комментарий мог прийти из NLP
+                    nlp_comment = str(intent.get("comment") or "").strip() or None
+                    comment_body = inline_comment or nlp_comment
+                    # если модель оставила «добавь комментарий» в title — подчистим
+                    title, title_comment = split_task_and_comment(title)
+                    if title_comment and not comment_body:
+                        comment_body = title_comment
                     token = str(intent.get("assignee") or "me")
                     if not title:
                         # иногда модель кладёт всё в assignee — вытащим из исходного текста
                         m = re.search(
-                            r"(?i)(?:задач[ау]|поставь|назначь)\s+(.+)$", text.strip()
+                            r"(?i)(?:задач[ау]|поставь|назначь)\s+(.+)$", task_text.strip()
                         )
-                        title = (m.group(1) if m else text).strip()
+                        title = (m.group(1) if m else task_text).strip()
                         title = re.sub(
                             r"(?i)\b(всем|всех|на\s+всех|для\s+всех|команде)\b",
                             "",
                             title,
                         ).strip(" .,!—-")
+                        title, title_comment2 = split_task_and_comment(title)
+                        if title_comment2 and not comment_body:
+                            comment_body = title_comment2
                     if not title:
                         await wait.edit_text("Не увидел текст задачи. Сформулируй ещё раз.")
                         return
                     # «всем» часто теряется в tool — дублируем эвристикой по исходному тексту
                     if re.search(
                         r"(?i)(?<![а-яa-z])(всем|всех|на\s+всех|для\s+всех|всей\s+команде)(?![а-яa-z])",
-                        text,
+                        task_text,
                     ):
                         token = "all"
                     targets = _resolve_assignees(
-                        list(people), token, author, raw_text=text
+                        list(people), token, author, raw_text=task_text
                     )
                     if not targets:
                         await wait.edit_text(
@@ -1088,6 +1312,9 @@ def build_dispatcher(
                         author=author,
                         due_hint=due_hint,
                     )
+                    if clarify:
+                        await wait.edit_text(clarify)
+                        return
                     due_txt = (
                         task.due_date.strftime("%d.%m.%Y")
                         if task and task.due_date
@@ -1098,14 +1325,22 @@ def build_dispatcher(
                     else:
                         names = ", ".join(e.name for e in targets)
                         who = f"всем ({len(targets)}): {names}"
-                    text = f"Готово: задача для {who}\n«{title}»\nСрок: {due_txt}"
+                    reply = f"Готово: задача для {who}\n«{title}»\nСрок: {due_txt}"
                     if ok and not err:
-                        text += f"\n📬 Уведомления: {len(targets)} из {len(targets)}"
+                        reply += f"\n📬 Уведомления: {len(targets)} из {len(targets)}"
                     elif ok and err:
-                        text += f"\n\n⚠️ {err}"
+                        reply += f"\n\n⚠️ {err}"
                     elif not ok:
-                        text += f"\n\n⚠️ В Telegram не ушло: {err or 'неизвестно'}"
-                    await wait.edit_text(text)
+                        reply += f"\n\n⚠️ В Telegram не ушло: {err or 'неизвестно'}"
+                    await wait.edit_text(reply)
+                    await _after_task_created_comment(
+                        message=message,
+                        state=state,
+                        session=session,
+                        task=task,
+                        author=author,
+                        inline_comment=comment_body,
+                    )
                     return
                 if action in {"list_my_tasks", "list_tasks"}:
                     who = str(intent.get("who") or "me").strip()
@@ -1187,8 +1422,8 @@ def build_dispatcher(
             logger.exception("nlp failed")
             await wait.edit_text(f"Не смог разобрать: {exc}")
 
-    @dp.message(F.voice)
-    async def on_voice(message: Message) -> None:
+    @dp.message(F.voice, ~StateFilter(CommentForm.waiting))
+    async def on_voice(message: Message, state: FSMContext) -> None:
         if not settings.nlp_enabled:
             await message.answer("Голос заработает после OPENAI_API_KEY в Railway.")
             return
@@ -1209,12 +1444,16 @@ def build_dispatcher(
             await message.answer("Пустая расшифровка, повтори.")
             return
         await message.answer(f"Распознал: {text}")
-        await _handle_natural(message, text)
+        await _handle_natural(message, text, state)
 
-    @dp.message(F.text, ~StateFilter(JoinForm.waiting_name))
-    async def on_text(message: Message) -> None:
+    @dp.message(
+        F.text,
+        ~StateFilter(JoinForm.waiting_name),
+        ~StateFilter(CommentForm.waiting),
+    )
+    async def on_text(message: Message, state: FSMContext) -> None:
         if not message.text or message.text.startswith("/"):
             return
-        await _handle_natural(message, message.text)
+        await _handle_natural(message, message.text, state)
 
     return bot, dp

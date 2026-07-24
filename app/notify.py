@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Employee, Task, TaskAssignee, TaskRun
+from app.models import Employee, Task, TaskAssignee, TaskComment, TaskRun
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 def task_action_kb(
     run_id: int, task_id: int, *, status: str = "todo"
 ) -> InlineKeyboardMarkup:
-    """Кнопки статуса: В работе / Сделано."""
+    """Кнопки статуса: В работе / Сделано + комментарий."""
+    rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     if status != "doing" and status != "done":
         row.append(
@@ -34,9 +35,31 @@ def task_action_kb(
                 callback_data=f"done:{run_id}:{task_id}",
             )
         )
-    if not row:
+    if row:
+        rows.append(row)
+    if status != "done":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="💬 Комментарий",
+                    callback_data=f"comment:{run_id}:{task_id}",
+                )
+            ]
+        )
+    if not rows:
         return InlineKeyboardMarkup(inline_keyboard=[])
-    return InlineKeyboardMarkup(inline_keyboard=[row])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def ask_comment_kb(task_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Да", callback_data=f"askc:yes:{task_id}"),
+                InlineKeyboardButton(text="Нет", callback_data=f"askc:no:{task_id}"),
+            ]
+        ]
+    )
 
 
 # обратная совместимость импортов
@@ -110,7 +133,7 @@ async def notify_task_assignee(
     text = (
         f"📋 Новая задача от <b>{author}</b>\n"
         f"<b>{task.title}</b>{sku_line}{due_line}\n\n"
-        "Жми «В работе» или «Сделано»."
+        "Жми «В работе», «Сделано» или «Комментарий»."
     )
 
     errors: list[str] = []
@@ -184,3 +207,75 @@ async def resolve_run(
         run = await ensure_run(session, task.id, due)
         return await session.get(TaskRun, run.id, options=opts)
     return None
+
+
+async def save_task_comment(
+    session: AsyncSession,
+    *,
+    task_id: int,
+    author: Employee,
+    body: str,
+) -> TaskComment | None:
+    text = (body or "").strip()
+    if not text:
+        return None
+    from app.tasks_service import add_event
+
+    c = TaskComment(
+        task_id=task_id,
+        author_id=author.id,
+        body=text[:4000],
+        created_at=datetime.utcnow(),
+    )
+    session.add(c)
+    await add_event(
+        session,
+        task_id,
+        f"Комментарий — {author.name}",
+        kind="comment",
+        actor_id=author.id,
+    )
+    await session.commit()
+    await session.refresh(c)
+    return c
+
+
+async def notify_task_comment(
+    *,
+    bot: Bot | None,
+    task: Task,
+    author: Employee,
+    body: str,
+) -> None:
+    """Комментарий уходит тому, кто ставил задачу; если пишет постановщик — исполнителям."""
+    if not bot:
+        return
+    text = (
+        f"💬 Комментарий к задаче <b>{task.title}</b>\n"
+        f"от <b>{author.name}</b>:\n{body.strip()}"
+    )
+    recipients: list[Employee] = []
+    seen: set[int] = set()
+
+    def _add(emp: Employee | None) -> None:
+        if not emp or not emp.telegram_id:
+            return
+        tid = int(emp.telegram_id)
+        if tid in seen or emp.id == author.id:
+            return
+        seen.add(tid)
+        recipients.append(emp)
+
+    if task.created_by_id and author.id != task.created_by_id:
+        _add(task.created_by)
+    else:
+        for emp in _targets(task):
+            _add(emp)
+
+    for emp in recipients:
+        try:
+            await bot.send_message(int(emp.telegram_id), text, parse_mode="HTML")
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "comment notify failed task=%s user=%s", task.id, emp.telegram_id
+            )
