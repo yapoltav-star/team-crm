@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     bot = None
     poll_task = None
 
+    dp = None
     if settings.bot_enabled:
         bot, dp = build_dispatcher(settings, SessionLocal)
 
@@ -50,17 +51,30 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(tick, "interval", minutes=1, id="crm_tick", replace_existing=True, max_instances=1)
         scheduler.start()
         await tick()
-        poll_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+        # снять webhook и чужой polling-хвост перед стартом
+        try:
+            await bot.delete_webhook(drop_pending_updates=False)
+        except Exception:  # noqa: BLE001
+            logger.exception("delete_webhook failed")
+        poll_task = asyncio.create_task(
+            dp.start_polling(bot, handle_signals=False, allowed_updates=dp.resolve_used_update_types())
+        )
         logger.info("Telegram bot + scheduler started")
     else:
         logger.warning("Bot disabled: set TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_ID")
 
     app.state.bot = bot
     app.state.scheduler = scheduler
+    app.state.dp = dp
     yield
 
     if scheduler.running:
         scheduler.shutdown(wait=False)
+    if dp is not None:
+        try:
+            await dp.stop_polling()
+        except Exception:  # noqa: BLE001
+            logger.exception("stop_polling failed")
     if poll_task:
         poll_task.cancel()
         try:
