@@ -25,6 +25,14 @@ TOOLS = [
                         "type": "string",
                         "description": "me | boss | имя сотрудника из списка",
                     },
+                    "due": {
+                        "type": "string",
+                        "description": (
+                            "today — если сказал сегодня; "
+                            "tomorrow — завтра; "
+                            "default — если срок не уточнял (будет +3 дня)"
+                        ),
+                    },
                 },
                 "required": ["title", "assignee"],
             },
@@ -135,6 +143,7 @@ async def parse_intent(
         "Ты ассистент task-CRM в Telegram. Пользователь пишет текстом или голосом.\n"
         f"Автор: {author_name} — {role}. Сотрудники: {names}.\n"
         "Создать задачу → create_task (assignee=me|boss|имя).\n"
+        "Если сказал «сегодня»/«завтра» — due=today|tomorrow, иначе due=default.\n"
         "В title можно писать короткий артикул: «042 голд», «041 серый» — "
         "система сама развернёт в полный vendorCode; не выдумывай артикулы.\n"
         "Спросить задачи / кто чем занят / у кого что → list_tasks "

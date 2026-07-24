@@ -15,12 +15,33 @@ from app.models import Employee, Task, TaskAssignee, TaskRun
 logger = logging.getLogger(__name__)
 
 
+def task_action_kb(
+    run_id: int, task_id: int, *, status: str = "todo"
+) -> InlineKeyboardMarkup:
+    """Кнопки статуса: В работе / Сделано."""
+    row: list[InlineKeyboardButton] = []
+    if status != "doing" and status != "done":
+        row.append(
+            InlineKeyboardButton(
+                text="🔵 В работе",
+                callback_data=f"doing:{run_id}:{task_id}",
+            )
+        )
+    if status != "done":
+        row.append(
+            InlineKeyboardButton(
+                text="✅ Сделано",
+                callback_data=f"done:{run_id}:{task_id}",
+            )
+        )
+    if not row:
+        return InlineKeyboardMarkup(inline_keyboard=[])
+    return InlineKeyboardMarkup(inline_keyboard=[row])
+
+
+# обратная совместимость импортов
 def done_kb(run_id: int, task_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Сделано", callback_data=f"done:{run_id}:{task_id}")]
-        ]
-    )
+    return task_action_kb(run_id, task_id, status="todo")
 
 
 async def ensure_run(session: AsyncSession, task_id: int, due: date) -> TaskRun:
@@ -48,6 +69,12 @@ def _targets(task: Task) -> list[Employee]:
     return people
 
 
+def format_due(d: date | None) -> str:
+    if not d:
+        return ""
+    return f"\nСрок: <b>{d.strftime('%d.%m.%Y')}</b>"
+
+
 async def notify_task_assignee(
     *,
     bot: Bot | None,
@@ -69,10 +96,11 @@ async def notify_task_assignee(
     if (task.articles or "").strip():
         codes = ", ".join(x.strip() for x in task.articles.split(",") if x.strip())
         sku_line = f"\nАртикул: <code>{codes}</code>"
+    due_line = format_due(task.due_date or due)
     text = (
         f"📋 Новая задача от <b>{author}</b>\n"
-        f"<b>{task.title}</b>{sku_line}\n\n"
-        "Жми «Сделано», когда выполнишь."
+        f"<b>{task.title}</b>{sku_line}{due_line}\n\n"
+        "Жми «В работе» или «Сделано»."
     )
 
     errors: list[str] = []
@@ -85,7 +113,7 @@ async def notify_task_assignee(
             await bot.send_message(
                 int(emp.telegram_id),
                 text,
-                reply_markup=done_kb(int(run.id), int(task.id)),
+                reply_markup=task_action_kb(int(run.id), int(task.id), status=task.status or "todo"),
                 parse_mode="HTML",
             )
             sent += 1
@@ -142,7 +170,7 @@ async def resolve_run(
         )
         if not task:
             return None
-        due = datetime.utcnow().date()
+        due = task.due_date or datetime.utcnow().date()
         run = await ensure_run(session, task.id, due)
         return await session.get(TaskRun, run.id, options=opts)
     return None

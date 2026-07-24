@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
@@ -9,6 +10,35 @@ from sqlalchemy.orm import selectinload
 from app.models import Employee, Task, TaskAssignee, TaskComment, TaskEvent, TaskTemplate
 
 STATUS_LABEL = {"todo": "Новая", "doing": "В работе", "done": "Выполнено"}
+
+_DEFAULT_DUE_DAYS = 3
+
+
+def resolve_due_date(
+    today: date,
+    *,
+    text: str = "",
+    explicit: date | None = None,
+    hint: str | None = None,
+) -> date:
+    """Срок: явный → сегодня/завтра из текста/hint → иначе +3 дня."""
+    if explicit is not None:
+        return explicit
+    h = (hint or "").strip().lower()
+    blob = f"{h} {text}".lower()
+    if h in {"today", "сегодня"} or re.search(
+        r"(?i)(?<![а-яa-z])(сегодня|на\s+сегодня|today)(?![а-яa-z])", blob
+    ):
+        return today
+    if h in {"tomorrow", "завтра"} or re.search(
+        r"(?i)(?<![а-яa-z])(завтра|на\s+завтра|tomorrow)(?![а-яa-z])", blob
+    ):
+        return today + timedelta(days=1)
+    if h in {"day_after", "послезавтра"} or re.search(
+        r"(?i)(?<![а-яa-z])послезавтра(?![а-яa-z])", blob
+    ):
+        return today + timedelta(days=2)
+    return today + timedelta(days=_DEFAULT_DUE_DAYS)
 
 
 async def add_event(

@@ -38,6 +38,7 @@ from app.tasks_service import (
     apply_status,
     due_flag,
     load_task_full,
+    resolve_due_date,
     set_assignees,
 )
 
@@ -304,6 +305,10 @@ async def create_task(
     if body.assignee_id and body.assignee_id not in ids:
         ids.insert(0, body.assignee_id)
 
+    due = body.due_date
+    if due is None and (body.kind or "once") == "once":
+        due = resolve_due_date(today, text=title)
+
     task = Task(
         title=title,
         description=body.description,
@@ -315,7 +320,7 @@ async def create_task(
         kind=body.kind,
         weekdays=body.weekdays,
         notify_time=body.notify_time or now_hm,
-        due_date=body.due_date,
+        due_date=due,
         priority=body.priority or "normal",
         created_at=datetime.utcnow(),
     )

@@ -105,7 +105,7 @@ async def health() -> dict:
     settings = get_settings()
     return {
         "ok": True,
-        "build": "persist-db-2026-07-24",
+        "build": "due3-status-btns-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
     }

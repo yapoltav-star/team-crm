@@ -23,7 +23,8 @@ from sqlalchemy.orm import selectinload
 
 from app.config import Settings
 from app.models import Employee, Task, TaskAssignee, TaskRun
-from app.notify import done_kb, ensure_run, notify_task_assignee, resolve_run
+from app.notify import ensure_run, notify_task_assignee, resolve_run, task_action_kb
+from app.tasks_service import resolve_due_date
 
 logger = logging.getLogger("crm-bot")
 
@@ -156,6 +157,8 @@ async def create_and_notify(
     weekdays: str = "",
     notify_time: str | None = None,
     articles: str = "",
+    due_date: date | None = None,
+    due_hint: str | None = None,
 ) -> tuple[Task | None, bool, str | None, str | None]:
     """Returns (task, notify_ok, notify_err, clarify_msg). clarify_msg => task not created."""
     from app.catalog import load_catalog
@@ -172,6 +175,9 @@ async def create_and_notify(
     from app.tasks_service import add_event, set_assignees
 
     today = datetime.now(settings.tz).date()
+    due = None
+    if kind == "once":
+        due = resolve_due_date(today, text=title, explicit=due_date, hint=due_hint)
     task = Task(
         title=title,
         articles=articles or "",
@@ -181,7 +187,7 @@ async def create_and_notify(
         kind=kind,
         weekdays=weekdays,
         notify_time=notify_time or datetime.now(settings.tz).strftime("%H:%M"),
-        due_date=today if kind == "once" else None,
+        due_date=due,
     )
     session.add(task)
     await session.commit()
@@ -368,13 +374,15 @@ async def materialize_and_notify(
             text = (
                 f"📋 Задача на сегодня ({today.isoformat()}) от <b>{author}</b>\n"
                 f"<b>{task.title}</b>\n\n"
-                "Жми «Сделано», когда выполнишь."
+                "Жми «В работе» или «Сделано»."
             )
             try:
                 await bot.send_message(
                     task.assignee.telegram_id,
                     text,
-                    reply_markup=done_kb(int(run.id), int(task.id)),
+                    reply_markup=task_action_kb(
+                        int(run.id), int(task.id), status=task.status or "todo"
+                    ),
                     parse_mode="HTML",
                 )
                 run.notified_at = datetime.utcnow()
@@ -820,11 +828,23 @@ def build_dispatcher(
                 return
         await message.answer(f"Еженедельная задача создана: {title}")
 
-    @dp.callback_query(F.data.startswith("done:"))
-    async def on_done(callback: CallbackQuery) -> None:
+    def _task_allowed_ids(task: Task) -> set[int]:
+        allowed = {int(settings.owner_telegram_id)}
+        if task.assignee and task.assignee.telegram_id is not None:
+            allowed.add(int(task.assignee.telegram_id))
+        for link in task.assignees or []:
+            if link.employee and link.employee.telegram_id is not None:
+                allowed.add(int(link.employee.telegram_id))
+        return allowed
+
+    @dp.callback_query(F.data.startswith("doing:") | F.data.startswith("done:"))
+    async def on_task_status(callback: CallbackQuery) -> None:
         if not callback.data or not callback.from_user:
             return
         parts = callback.data.split(":")
+        action = parts[0]
+        if action not in {"doing", "done"}:
+            return
         try:
             run_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
             task_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
@@ -835,40 +855,80 @@ def build_dispatcher(
         notify_ids: set[int] = set()
         name = "?"
         title = ""
+        new_status = action
         uid = int(callback.from_user.id)
         async with session_factory() as session:
             run = await resolve_run(session, run_id=run_id, task_id=task_id)
             if not run or not run.task:
-                logger.warning("done miss data=%s run_id=%s task_id=%s", callback.data, run_id, task_id)
+                logger.warning(
+                    "status miss data=%s run_id=%s task_id=%s",
+                    callback.data,
+                    run_id,
+                    task_id,
+                )
                 await callback.answer(
                     "Задача не найдена. Создай новую — старые кнопки могли протухнуть после деплоя.",
                     show_alert=True,
                 )
                 return
-            assignee = run.task.assignee
-            allowed = {int(settings.owner_telegram_id)}
-            if assignee and assignee.telegram_id is not None:
-                allowed.add(int(assignee.telegram_id))
-            if uid not in allowed:
+            if uid not in _task_allowed_ids(run.task):
                 await callback.answer("Не твоя задача", show_alert=True)
                 return
             from app.tasks_service import apply_status
 
-            run.status = "done"
-            run.completed_at = datetime.utcnow()
             actor = await find_employee(session, uid)
             await apply_status(
                 session,
                 run.task,
-                "done",
+                new_status,
                 actor_id=actor.id if actor else None,
             )
+            if new_status == "done":
+                run.status = "done"
+                run.completed_at = datetime.utcnow()
             await session.commit()
-            name = assignee.name if assignee else "?"
+            name = (
+                next(
+                    (
+                        a.employee.name
+                        for a in (run.task.assignees or [])
+                        if a.employee and int(a.employee.telegram_id or 0) == uid
+                    ),
+                    None,
+                )
+                or (run.task.assignee.name if run.task.assignee else "?")
+            )
             title = run.task.title
+            run_id_final = int(run.id)
+            task_id_final = int(run.task.id)
             notify_ids.add(int(settings.owner_telegram_id))
             if run.task.created_by and run.task.created_by.telegram_id is not None:
                 notify_ids.add(int(run.task.created_by.telegram_id))
+
+        if new_status == "doing":
+            await callback.answer("В работе 🔵")
+            if callback.message:
+                try:
+                    await callback.message.edit_text(
+                        f"🔵 В работе: <b>{title}</b>\n\nЖми «Сделано», когда закончишь.",
+                        parse_mode="HTML",
+                        reply_markup=task_action_kb(
+                            run_id_final, task_id_final, status="doing"
+                        ),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            for tid in notify_ids:
+                if tid == uid:
+                    continue
+                try:
+                    await callback.bot.send_message(
+                        tid, f"🔵 {name} взял(а) в работу: {title}"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            return
+
         await callback.answer("Готово ✅")
         if callback.message:
             try:
@@ -939,6 +999,7 @@ def build_dispatcher(
                             f"Не понял, кому задача («{token}»). Назови имя из команды или скажи «себе»/«боссу»."
                         )
                         return
+                    due_hint = str(intent.get("due") or "default")
                     task, ok, err, clarify = await create_and_notify(
                         session=session,
                         bot=message.bot,
@@ -946,8 +1007,17 @@ def build_dispatcher(
                         title=title,
                         assignee=assignee,
                         author=author,
+                        due_hint=due_hint,
                     )
-                    text = f"Готово: задача для {assignee.name}\n«{title}»"
+                    due_txt = (
+                        task.due_date.strftime("%d.%m.%Y")
+                        if task and task.due_date
+                        else "—"
+                    )
+                    text = (
+                        f"Готово: задача для {assignee.name}\n«{title}»\n"
+                        f"Срок: {due_txt}"
+                    )
                     if not ok:
                         text += f"\n\n⚠️ В Telegram не ушло: {err or 'неизвестно'}"
                     await wait.edit_text(text)
