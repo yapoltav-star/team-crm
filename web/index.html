@@ -3,12 +3,30 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Team CRM — Канбан</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <title>Team CRM</title>
+  <style>
+    /* критичные стили — чтобы UI не «ломался», если /static не отдал CSS */
+    .hidden { display: none !important; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: #f3ebe1;
+      background:
+        radial-gradient(900px 480px at 0% 0%, #2a2118, transparent 55%),
+        #141210;
+      font-family: "Manrope", system-ui, sans-serif;
+    }
+  </style>
+  <link rel="stylesheet" href="/static/styles.css?v=tasks-core-1" />
 </head>
 <body>
   <header class="top">
     <div class="brand">Team CRM <span>ops</span></div>
+    <nav class="nav-tabs" id="navTabs">
+      <button type="button" data-view="home" class="active">Главная</button>
+      <button type="button" data-view="board">Доска</button>
+      <button type="button" data-view="templates">Шаблоны</button>
+    </nav>
     <div class="filters">
       <select id="projectFilter"><option value="">Все проекты</option></select>
       <button id="btnNewProject" type="button">+ Проект</button>
@@ -19,72 +37,131 @@
     </div>
   </header>
 
-  <div class="layout">
-    <aside class="people">
-      <div class="people-head">
-        <h2>Команда</h2>
-        <button id="btnAllPeople" type="button" class="ghost">Все</button>
+  <!-- HOME -->
+  <section id="viewHome" class="view">
+    <div class="home-wrap">
+      <div class="home-intro">
+        <h1>Что сделать сейчас</h1>
+        <p id="homeHint">Войди — увидишь свои задачи.</p>
       </div>
-      <div id="peopleList" class="people-list"></div>
-    </aside>
+      <div id="homeGrid" class="home-grid"></div>
+    </div>
+  </section>
 
-    <section class="workspace">
-      <div id="managerBar" class="manager-bar">
-        <div>
-          <div class="manager-name" id="managerName">Вся команда</div>
-          <div class="manager-sub" id="managerSub">
-            Люди слева · задача сверху · артикул на карточке.
-            Пример: «042 голд — проверить остаток»
-          </div>
+  <!-- BOARD -->
+  <section id="viewBoard" class="view hidden">
+    <div class="layout">
+      <aside class="people">
+        <div class="people-head">
+          <h2>Команда</h2>
+          <button id="btnAllPeople" type="button" class="ghost">Все</button>
         </div>
-        <form id="quickAdd" class="quick-add">
-          <select id="assignTo" name="assign_to" title="Кому задача">
-            <option value="selected">Выбранному</option>
-            <option value="me">Себе</option>
-            <option value="boss">Владельцу</option>
-          </select>
-          <input
-            name="title"
-            placeholder="задача… можно с артикулом: 042 голд"
-            required
-            autocomplete="off"
-          />
-          <button type="submit">Назначить</button>
-        </form>
-      </div>
-      <main id="board" class="board"></main>
-      <p id="emptyHint" class="empty-hint hidden">Пока пусто — напиши задачу сверху.</p>
-    </section>
-  </div>
+        <div id="peopleList" class="people-list"></div>
+      </aside>
 
-  <dialog id="taskDlg">
+      <section class="workspace">
+        <div id="managerBar" class="manager-bar">
+          <div>
+            <div class="manager-name" id="managerName">Вся команда</div>
+            <div class="manager-sub" id="managerSub">
+              Люди слева · задача сверху · артикул на карточке.
+            </div>
+          </div>
+          <form id="quickAdd" class="quick-add">
+            <select id="assignTo" name="assign_to" title="Кому задача">
+              <option value="selected">Выбранному</option>
+              <option value="me">Себе</option>
+              <option value="boss">Владельцу</option>
+            </select>
+            <input
+              name="title"
+              placeholder="задача… можно с артикулом: 042 голд"
+              required
+              autocomplete="off"
+            />
+            <input type="date" id="quickDue" title="Срок" />
+            <button type="submit">Назначить</button>
+          </form>
+        </div>
+        <main id="board" class="board"></main>
+        <p id="emptyHint" class="empty-hint hidden">Пока пусто — напиши задачу сверху.</p>
+      </section>
+    </div>
+  </section>
+
+  <!-- TEMPLATES -->
+  <section id="viewTemplates" class="view hidden">
+    <div class="tpl-wrap">
+      <div class="tpl-head">
+        <div>
+          <h1>Шаблоны задач</h1>
+          <p>Повторяющиеся задачи создаются автоматически по расписанию.</p>
+        </div>
+        <button type="button" id="btnNewTemplate">+ Шаблон</button>
+      </div>
+      <div id="tplList" class="tpl-list"></div>
+    </div>
+  </section>
+
+  <!-- TASK DRAWER -->
+  <dialog id="taskDlg" class="drawer">
     <form id="dlgForm" method="dialog">
-      <h3 id="dlgTitle">Задача</h3>
+      <header class="drawer-head">
+        <h3 id="dlgTitle">Задача</h3>
+        <button type="button" id="dlgClose" class="ghost">✕</button>
+      </header>
       <input type="hidden" name="id" />
-      <label>Текст
-        <input name="title" required autocomplete="off" />
-      </label>
-      <label>Артикулы <span class="hint-mono">042_S11_g, через запятую</span>
-        <input name="articles" placeholder="042_S11_g" autocomplete="off" />
-      </label>
-      <label>Описание
-        <textarea name="description" rows="3"></textarea>
-      </label>
-      <label>Исполнитель
-        <select name="assignee_id"></select>
-      </label>
-      <label>Проект
-        <select name="project_id">
-          <option value="">Без проекта</option>
-        </select>
-      </label>
-      <label>Статус
-        <select name="status">
-          <option value="todo">К выполнению</option>
-          <option value="doing">В работе</option>
-          <option value="done">Сделано</option>
-        </select>
-      </label>
+
+      <div class="drawer-grid">
+        <div class="drawer-main">
+          <label>Текст
+            <input name="title" required autocomplete="off" />
+          </label>
+          <label>Артикулы <span class="hint-mono">через запятую</span>
+            <input name="articles" placeholder="042_S11_g" autocomplete="off" />
+          </label>
+          <label>Описание
+            <textarea name="description" rows="3"></textarea>
+          </label>
+          <label>Срок
+            <input type="date" name="due_date" />
+          </label>
+          <label>Статус
+            <select name="status">
+              <option value="todo">🟡 Новая</option>
+              <option value="doing">🔵 В работе</option>
+              <option value="done">🟢 Выполнено</option>
+            </select>
+          </label>
+          <label>Проект
+            <select name="project_id">
+              <option value="">Без проекта</option>
+            </select>
+          </label>
+          <fieldset class="assignees-box">
+            <legend>Исполнители</legend>
+            <div id="assigneeChecks" class="check-list"></div>
+          </fieldset>
+
+          <div id="datesBox" class="dates-box"></div>
+
+          <section class="thread">
+            <h4>Обсуждение</h4>
+            <div id="commentsBox" class="chat"></div>
+            <div class="chat-compose">
+              <textarea id="commentBody" rows="2" placeholder="Комментарий или заметка…"></textarea>
+              <input id="commentFile" type="text" placeholder="Файл: имя или ссылка (необязательно)" />
+              <button type="button" id="btnComment">Отправить</button>
+            </div>
+          </section>
+        </div>
+
+        <aside class="drawer-side">
+          <h4>История</h4>
+          <div id="eventsBox" class="events"></div>
+        </aside>
+      </div>
+
       <menu>
         <button type="button" id="dlgDelete" class="danger ghost">Удалить</button>
         <button type="button" id="dlgCancel" class="ghost">Отмена</button>
@@ -93,6 +170,51 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js"></script>
+  <!-- TEMPLATE DIALOG -->
+  <dialog id="tplDlg">
+    <form id="tplForm" method="dialog">
+      <h3 id="tplDlgTitle">Шаблон</h3>
+      <input type="hidden" name="id" />
+      <label>Название
+        <input name="title" required autocomplete="off" />
+      </label>
+      <label>Описание
+        <textarea name="description" rows="2"></textarea>
+      </label>
+      <label>Периодичность
+        <select name="recurrence" id="tplRecurrence">
+          <option value="daily">Каждый день</option>
+          <option value="weekly">Каждую неделю</option>
+          <option value="every_n_days">Каждые N дней</option>
+          <option value="monthly">Каждый месяц</option>
+          <option value="weekdays">По выбранным дням недели</option>
+          <option value="month_days">По выбранным числам месяца</option>
+        </select>
+      </label>
+      <label id="tplValueLabel"><span id="tplValueHint">Значение</span>
+        <input name="recurrence_value" id="tplValue" placeholder="например 1,3,5 или 3" />
+      </label>
+      <label>Дата начала
+        <input type="date" name="start_date" />
+      </label>
+      <label>Время уведомления
+        <input name="notify_time" value="09:00" placeholder="09:00" />
+      </label>
+      <fieldset class="assignees-box">
+        <legend>Сотрудники</legend>
+        <div id="tplAssigneeChecks" class="check-list"></div>
+      </fieldset>
+      <label class="check-row">
+        <input type="checkbox" name="active" checked /> Активен
+      </label>
+      <menu>
+        <button type="button" id="tplDelete" class="danger ghost">Удалить</button>
+        <button type="button" id="tplCancel" class="ghost">Отмена</button>
+        <button type="submit">Сохранить</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js?v=tasks-core-1"></script>
 </body>
 </html>

@@ -1,37 +1,96 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.catalog import load_catalog
 from app.config import get_settings
 from app.db import get_session
-from app.catalog import load_catalog
-from app.models import Employee, Project, Task
+from app.models import Employee, Project, Task, TaskAssignee, TaskComment, TaskTemplate
 from app.notify import notify_task_assignee
 from app.schemas import (
     ArticleOut,
     BoardOut,
+    CommentIn,
+    CommentOut,
     EmployeeIn,
     EmployeeOut,
     EmployeePatch,
+    EventOut,
+    HomeOut,
     ProjectIn,
     ProjectOut,
     TaskIn,
     TaskOut,
     TaskPatch,
+    TemplateIn,
+    TemplateOut,
+    AssigneeOut,
 )
 from app.sku import enrich_task_text
+from app.tasks_service import (
+    add_event,
+    apply_status,
+    due_flag,
+    load_task_full,
+    set_assignees,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-def _task_out(task: Task, *, notified: bool | None = None, notify_error: str | None = None) -> TaskOut:
+def _assignees_out(task: Task) -> list[AssigneeOut]:
+    out: list[AssigneeOut] = []
+    seen: set[int] = set()
+    for link in task.assignees or []:
+        if link.employee and link.employee_id not in seen:
+            seen.add(link.employee_id)
+            out.append(AssigneeOut(id=link.employee.id, name=link.employee.name))
+    if not out and task.assignee:
+        out.append(AssigneeOut(id=task.assignee.id, name=task.assignee.name))
+    return out
+
+
+def _task_out(
+    task: Task,
+    *,
+    today: date | None = None,
+    notified: bool | None = None,
+    notify_error: str | None = None,
+    with_thread: bool = False,
+) -> TaskOut:
+    today = today or date.today()
+    comments: list[CommentOut] = []
+    events: list[EventOut] = []
+    if with_thread:
+        for c in task.comments or []:
+            comments.append(
+                CommentOut(
+                    id=c.id,
+                    body=c.body,
+                    author_id=c.author_id,
+                    author_name=c.author.name if c.author else None,
+                    file_name=c.file_name or "",
+                    file_url=c.file_url or "",
+                    created_at=c.created_at,
+                )
+            )
+        for e in task.events or []:
+            events.append(
+                EventOut(
+                    id=e.id,
+                    kind=e.kind,
+                    message=e.message,
+                    actor_name=e.actor.name if e.actor else None,
+                    created_at=e.created_at,
+                )
+            )
     return TaskOut(
         id=task.id,
         title=task.title,
@@ -40,36 +99,45 @@ def _task_out(task: Task, *, notified: bool | None = None, notify_error: str | N
         project_id=task.project_id,
         assignee_id=task.assignee_id,
         created_by_id=task.created_by_id,
+        completed_by_id=task.completed_by_id,
         status=task.status,
         kind=task.kind,
         weekdays=task.weekdays or "",
         notify_time=task.notify_time,
+        due_date=task.due_date,
+        priority=task.priority or "normal",
         active=task.active,
         position=task.position,
+        created_at=task.created_at,
+        started_at=task.started_at,
+        completed_at=task.completed_at,
         assignee_name=task.assignee.name if task.assignee else None,
+        assignees=_assignees_out(task),
         project_name=task.project.name if task.project else None,
         created_by_name=task.created_by.name if task.created_by else None,
+        completed_by_name=task.completed_by.name if task.completed_by else None,
+        due_flag=due_flag(task.due_date, task.status, today),
         notified=notified,
         notify_error=notify_error,
+        comments=comments,
+        events=events,
     )
 
 
-async def _load_task(session: AsyncSession, task_id: int) -> Task:
+def _task_options():
     return (
-        await session.scalars(
-            select(Task)
-            .where(Task.id == task_id)
-            .options(
-                selectinload(Task.assignee),
-                selectinload(Task.project),
-                selectinload(Task.created_by),
-            )
-        )
-    ).one()
+        selectinload(Task.assignee),
+        selectinload(Task.project),
+        selectinload(Task.created_by),
+        selectinload(Task.completed_by),
+        selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+    )
 
 
 @router.get("/board", response_model=BoardOut)
 async def board(session: AsyncSession = Depends(get_session)) -> BoardOut:
+    settings = get_settings()
+    today = datetime.now(settings.tz).date()
     projects = (
         await session.scalars(select(Project).where(Project.active.is_(True)).order_by(Project.id))
     ).all()
@@ -82,18 +150,58 @@ async def board(session: AsyncSession = Depends(get_session)) -> BoardOut:
         await session.scalars(
             select(Task)
             .where(Task.active.is_(True))
-            .options(
-                selectinload(Task.assignee),
-                selectinload(Task.project),
-                selectinload(Task.created_by),
-            )
+            .options(*_task_options())
             .order_by(Task.position, Task.id)
         )
     ).all()
     return BoardOut(
         projects=[ProjectOut.model_validate(p) for p in projects],
         employees=[EmployeeOut.model_validate(e) for e in employees],
-        tasks=[_task_out(t) for t in tasks],
+        tasks=[_task_out(t, today=today) for t in tasks],
+    )
+
+
+@router.get("/home", response_model=HomeOut)
+async def home(
+    employee_id: int = Query(...),
+    session: AsyncSession = Depends(get_session),
+) -> HomeOut:
+    settings = get_settings()
+    today = datetime.now(settings.tz).date()
+    soon = today + timedelta(days=7)
+    tasks = (
+        await session.scalars(
+            select(Task)
+            .where(Task.active.is_(True), Task.status != "done")
+            .options(*_task_options())
+            .order_by(Task.due_date.nulls_last(), Task.id)
+        )
+    ).all()
+
+    def mine(t: Task) -> bool:
+        if t.assignee_id == employee_id:
+            return True
+        return any(a.employee_id == employee_id for a in (t.assignees or []))
+
+    mine_tasks = [t for t in tasks if mine(t)]
+    return HomeOut(
+        new=[_task_out(t, today=today) for t in mine_tasks if t.status == "todo"],
+        doing=[_task_out(t, today=today) for t in mine_tasks if t.status == "doing"],
+        overdue=[
+            _task_out(t, today=today)
+            for t in mine_tasks
+            if t.due_date and t.due_date < today
+        ],
+        today=[
+            _task_out(t, today=today)
+            for t in mine_tasks
+            if t.due_date == today
+        ],
+        upcoming=[
+            _task_out(t, today=today)
+            for t in mine_tasks
+            if t.due_date and today < t.due_date <= soon
+        ][:10],
     )
 
 
@@ -128,7 +236,6 @@ async def create_employee(
     existing = await session.scalar(select(Employee).where(Employee.telegram_id == body.telegram_id))
     if existing:
         existing.name = body.name.strip()[:200]
-        # не понижать владельца до менеджера при смене имени с сайта
         if int(existing.telegram_id) == int(settings.owner_telegram_id) or existing.role == "owner":
             existing.role = "owner"
         else:
@@ -161,6 +268,17 @@ async def patch_employee(
     return EmployeeOut.model_validate(emp)
 
 
+@router.get("/tasks/{task_id}", response_model=TaskOut)
+async def get_task(task_id: int, session: AsyncSession = Depends(get_session)) -> TaskOut:
+    settings = get_settings()
+    today = datetime.now(settings.tz).date()
+    try:
+        task = await load_task_full(session, task_id)
+    except Exception:
+        raise HTTPException(404, "Task not found") from None
+    return _task_out(task, today=today, with_thread=True)
+
+
 @router.post("/tasks", response_model=TaskOut)
 async def create_task(
     body: TaskIn,
@@ -168,6 +286,7 @@ async def create_task(
     session: AsyncSession = Depends(get_session),
 ) -> TaskOut:
     settings = get_settings()
+    today = datetime.now(settings.tz).date()
     now_hm = datetime.now(settings.tz).strftime("%H:%M")
     title = body.title
     articles = (body.articles or "").strip()
@@ -180,22 +299,41 @@ async def create_task(
         title = title2
     elif arts:
         title = title2
+
+    ids = list(body.assignee_ids or [])
+    if body.assignee_id and body.assignee_id not in ids:
+        ids.insert(0, body.assignee_id)
+
     task = Task(
         title=title,
         description=body.description,
         articles=articles,
         project_id=body.project_id,
-        assignee_id=body.assignee_id,
+        assignee_id=ids[0] if ids else None,
         created_by_id=body.created_by_id,
-        status=body.status,
+        status="todo" if body.status not in {"todo", "doing", "done"} else body.status,
         kind=body.kind,
         weekdays=body.weekdays,
         notify_time=body.notify_time or now_hm,
+        due_date=body.due_date,
+        priority=body.priority or "normal",
         created_at=datetime.utcnow(),
     )
+    if task.status == "doing":
+        task.started_at = datetime.utcnow()
+    if task.status == "done":
+        task.completed_at = datetime.utcnow()
+        task.completed_by_id = body.created_by_id
+
     session.add(task)
     await session.commit()
-    task = await _load_task(session, task.id)
+    task = await load_task_full(session, task.id)
+    if ids:
+        await set_assignees(session, task, ids, actor_id=body.created_by_id, log=True)
+    author = task.created_by.name if task.created_by else "кто-то"
+    await add_event(session, task.id, f"Создана — {author}", kind="created", actor_id=body.created_by_id)
+    await session.commit()
+    task = await load_task_full(session, task.id)
 
     notified: bool | None = None
     notify_error: str | None = None
@@ -205,10 +343,10 @@ async def create_task(
             bot=bot,
             session=session,
             task=task,
-            due=datetime.now(settings.tz).date(),
+            due=task.due_date or today,
         )
-        task = await _load_task(session, task.id)
-    return _task_out(task, notified=notified, notify_error=notify_error)
+        task = await load_task_full(session, task.id)
+    return _task_out(task, today=today, notified=notified, notify_error=notify_error, with_thread=True)
 
 
 @router.post("/tasks/{task_id}/notify", response_model=TaskOut)
@@ -218,34 +356,104 @@ async def retry_notify(
     session: AsyncSession = Depends(get_session),
 ) -> TaskOut:
     settings = get_settings()
+    today = datetime.now(settings.tz).date()
     task = await session.get(Task, task_id)
     if not task or not task.active:
         raise HTTPException(404, "Task not found")
-    task = await _load_task(session, task_id)
+    task = await load_task_full(session, task_id)
     bot = getattr(request.app.state, "bot", None)
     notified, notify_error = await notify_task_assignee(
         bot=bot,
         session=session,
         task=task,
-        due=datetime.now(settings.tz).date(),
+        due=task.due_date or today,
     )
-    task = await _load_task(session, task_id)
-    return _task_out(task, notified=notified, notify_error=notify_error)
+    task = await load_task_full(session, task_id)
+    return _task_out(task, today=today, notified=notified, notify_error=notify_error, with_thread=True)
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskOut)
 async def patch_task(
     task_id: int, body: TaskPatch, session: AsyncSession = Depends(get_session)
 ) -> TaskOut:
+    settings = get_settings()
+    today = datetime.now(settings.tz).date()
     task = await session.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
+    task = await load_task_full(session, task_id)
     data = body.model_dump(exclude_unset=True)
+    actor_id = data.pop("actor_id", None)
+    assignee_ids = data.pop("assignee_ids", None)
+    new_status = data.pop("status", None)
+
+    single_assignee = data.pop("assignee_id", None)
+
     for key, value in data.items():
         setattr(task, key, value)
+
+    if new_status is not None:
+        try:
+            await apply_status(session, task, new_status, actor_id=actor_id)
+        except ValueError:
+            raise HTTPException(400, "Статус только: todo | doing | done") from None
+
+    if assignee_ids is not None:
+        await set_assignees(session, task, assignee_ids, actor_id=actor_id, log=True)
+    elif single_assignee is not None:
+        await set_assignees(
+            session,
+            task,
+            [single_assignee] if single_assignee else [],
+            actor_id=actor_id,
+            log=True,
+        )
+
     await session.commit()
-    task = await _load_task(session, task_id)
-    return _task_out(task)
+    task = await load_task_full(session, task_id)
+    return _task_out(task, today=today, with_thread=True)
+
+
+@router.post("/tasks/{task_id}/comments", response_model=CommentOut)
+async def add_comment(
+    task_id: int, body: CommentIn, session: AsyncSession = Depends(get_session)
+) -> CommentOut:
+    task = await session.get(Task, task_id)
+    if not task or not task.active:
+        raise HTTPException(404, "Task not found")
+    text = (body.body or "").strip()
+    if not text and not body.file_url:
+        raise HTTPException(400, "Пустой комментарий")
+    c = TaskComment(
+        task_id=task_id,
+        author_id=body.author_id,
+        body=text,
+        file_name=(body.file_name or "")[:300],
+        file_url=(body.file_url or "")[:1000],
+        created_at=datetime.utcnow(),
+    )
+    session.add(c)
+    author = None
+    if body.author_id:
+        author = await session.get(Employee, body.author_id)
+    await add_event(
+        session,
+        task_id,
+        f"Комментарий — {author.name if author else 'кто-то'}",
+        kind="comment",
+        actor_id=body.author_id,
+    )
+    await session.commit()
+    await session.refresh(c)
+    return CommentOut(
+        id=c.id,
+        body=c.body,
+        author_id=c.author_id,
+        author_name=author.name if author else None,
+        file_name=c.file_name or "",
+        file_url=c.file_url or "",
+        created_at=c.created_at,
+    )
 
 
 @router.delete("/tasks/{task_id}")
@@ -254,5 +462,82 @@ async def delete_task(task_id: int, session: AsyncSession = Depends(get_session)
     if not task:
         raise HTTPException(404, "Task not found")
     task.active = False
+    await add_event(session, task_id, "Задача удалена", kind="deleted")
+    await session.commit()
+    return {"ok": True}
+
+
+def _template_out(t: TaskTemplate) -> TemplateOut:
+    ids = [int(x) for x in (t.assignee_ids or "").split(",") if x.strip().isdigit()]
+    return TemplateOut(
+        id=t.id,
+        title=t.title,
+        description=t.description or "",
+        assignee_ids=ids,
+        recurrence=t.recurrence,
+        recurrence_value=t.recurrence_value or "",
+        start_date=t.start_date,
+        notify_time=t.notify_time,
+        active=t.active,
+        last_spawned_on=t.last_spawned_on,
+    )
+
+
+@router.get("/templates", response_model=list[TemplateOut])
+async def list_templates(session: AsyncSession = Depends(get_session)) -> list[TemplateOut]:
+    rows = (
+        await session.scalars(select(TaskTemplate).order_by(TaskTemplate.id.desc()))
+    ).all()
+    return [_template_out(t) for t in rows]
+
+
+@router.post("/templates", response_model=TemplateOut)
+async def create_template(
+    body: TemplateIn, session: AsyncSession = Depends(get_session)
+) -> TemplateOut:
+    t = TaskTemplate(
+        title=body.title.strip(),
+        description=body.description or "",
+        assignee_ids=",".join(str(i) for i in body.assignee_ids),
+        recurrence=body.recurrence,
+        recurrence_value=body.recurrence_value or "",
+        start_date=body.start_date,
+        notify_time=body.notify_time or "09:00",
+        active=body.active,
+    )
+    session.add(t)
+    await session.commit()
+    await session.refresh(t)
+    return _template_out(t)
+
+
+@router.patch("/templates/{template_id}", response_model=TemplateOut)
+async def patch_template(
+    template_id: int, body: TemplateIn, session: AsyncSession = Depends(get_session)
+) -> TemplateOut:
+    t = await session.get(TaskTemplate, template_id)
+    if not t:
+        raise HTTPException(404, "Not found")
+    t.title = body.title.strip()
+    t.description = body.description or ""
+    t.assignee_ids = ",".join(str(i) for i in body.assignee_ids)
+    t.recurrence = body.recurrence
+    t.recurrence_value = body.recurrence_value or ""
+    t.start_date = body.start_date
+    t.notify_time = body.notify_time or "09:00"
+    t.active = body.active
+    await session.commit()
+    await session.refresh(t)
+    return _template_out(t)
+
+
+@router.delete("/templates/{template_id}")
+async def delete_template(
+    template_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    t = await session.get(TaskTemplate, template_id)
+    if not t:
+        raise HTTPException(404, "Not found")
+    await session.delete(t)
     await session.commit()
     return {"ok": True}

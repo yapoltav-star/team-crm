@@ -48,17 +48,50 @@ class ArticleOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AssigneeOut(BaseModel):
+    id: int
+    name: str
+
+
+class CommentIn(BaseModel):
+    body: str
+    author_id: int | None = None
+    file_name: str = ""
+    file_url: str = ""
+
+
+class CommentOut(BaseModel):
+    id: int
+    body: str
+    author_id: int | None = None
+    author_name: str | None = None
+    file_name: str = ""
+    file_url: str = ""
+    created_at: datetime
+
+
+class EventOut(BaseModel):
+    id: int
+    kind: str
+    message: str
+    actor_name: str | None = None
+    created_at: datetime
+
+
 class TaskIn(BaseModel):
     title: str
     description: str = ""
     articles: str = ""
     project_id: int | None = None
     assignee_id: int | None = None
+    assignee_ids: list[int] = Field(default_factory=list)
     created_by_id: int | None = None
     status: str = "todo"
     kind: str = "once"
     weekdays: str = ""
     notify_time: str = "09:00"
+    due_date: date | None = None
+    priority: str = "normal"
     notify_now: bool = True
 
 
@@ -68,12 +101,16 @@ class TaskPatch(BaseModel):
     articles: str | None = None
     project_id: int | None = None
     assignee_id: int | None = None
+    assignee_ids: list[int] | None = None
     status: str | None = None
     kind: str | None = None
     weekdays: str | None = None
     notify_time: str | None = None
+    due_date: date | None = None
+    priority: str | None = None
     position: int | None = None
     active: bool | None = None
+    actor_id: int | None = None
 
 
 class TaskOut(BaseModel):
@@ -84,17 +121,28 @@ class TaskOut(BaseModel):
     project_id: int | None
     assignee_id: int | None
     created_by_id: int | None = None
+    completed_by_id: int | None = None
     status: str
     kind: str
     weekdays: str
     notify_time: str
+    due_date: date | None = None
+    priority: str = "normal"
     active: bool
     position: int
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     assignee_name: str | None = None
+    assignees: list[AssigneeOut] = Field(default_factory=list)
     project_name: str | None = None
     created_by_name: str | None = None
+    completed_by_name: str | None = None
+    due_flag: str | None = None  # overdue|today|done|null
     notified: bool | None = None
     notify_error: str | None = None
+    comments: list[CommentOut] = Field(default_factory=list)
+    events: list[EventOut] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -106,10 +154,35 @@ class BoardOut(BaseModel):
     columns: list[str] = Field(default_factory=lambda: ["todo", "doing", "done"])
 
 
-class TaskRunOut(BaseModel):
+class HomeOut(BaseModel):
+    new: list[TaskOut]
+    doing: list[TaskOut]
+    overdue: list[TaskOut]
+    today: list[TaskOut]
+    upcoming: list[TaskOut]
+
+
+class TemplateIn(BaseModel):
+    title: str
+    description: str = ""
+    assignee_ids: list[int] = Field(default_factory=list)
+    recurrence: str = "daily"
+    recurrence_value: str = ""
+    start_date: date | None = None
+    notify_time: str = "09:00"
+    active: bool = True
+
+
+class TemplateOut(BaseModel):
     id: int
-    task_id: int
-    due_date: date
-    status: str
-    title: str | None = None
-    assignee_name: str | None = None
+    title: str
+    description: str
+    assignee_ids: list[int]
+    recurrence: str
+    recurrence_value: str
+    start_date: date | None
+    notify_time: str
+    active: bool
+    last_spawned_on: date | None = None
+
+    model_config = {"from_attributes": True}

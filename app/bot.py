@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.config import Settings
-from app.models import Employee, Task, TaskRun
+from app.models import Employee, Task, TaskAssignee, TaskRun
 from app.notify import done_kb, ensure_run, notify_task_assignee, resolve_run
 
 logger = logging.getLogger("crm-bot")
@@ -137,6 +137,9 @@ async def create_and_notify(
         articles = arts
     title = title2
 
+    from app.tasks_service import add_event, set_assignees
+
+    today = datetime.now(settings.tz).date()
     task = Task(
         title=title,
         articles=articles or "",
@@ -146,6 +149,7 @@ async def create_and_notify(
         kind=kind,
         weekdays=weekdays,
         notify_time=notify_time or datetime.now(settings.tz).strftime("%H:%M"),
+        due_date=today if kind == "once" else None,
     )
     session.add(task)
     await session.commit()
@@ -153,7 +157,27 @@ async def create_and_notify(
         await session.scalars(
             select(Task)
             .where(Task.id == task.id)
-            .options(selectinload(Task.assignee), selectinload(Task.created_by))
+            .options(
+                selectinload(Task.assignee),
+                selectinload(Task.created_by),
+                selectinload(Task.assignees),
+            )
+        )
+    ).one()
+    await set_assignees(session, task, [assignee.id], actor_id=author.id, log=True)
+    await add_event(
+        session, task.id, f"Создана — {author.name}", kind="created", actor_id=author.id
+    )
+    await session.commit()
+    task = (
+        await session.scalars(
+            select(Task)
+            .where(Task.id == task.id)
+            .options(
+                selectinload(Task.assignee),
+                selectinload(Task.created_by),
+                selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+            )
         )
     ).one()
 
@@ -163,7 +187,7 @@ async def create_and_notify(
             bot=bot,
             session=session,
             task=task,
-            due=datetime.now(settings.tz).date(),
+            due=task.due_date or today,
         )
         if not ok and err:
             logger.warning("bot notify failed: %s", err)
@@ -176,7 +200,7 @@ async def _reply_created(message: Message, ok: bool, err: str | None, ok_text: s
         await message.answer(ok_text + "\n\n⚠️ В Telegram не ушло: " + (err or "неизвестно"))
 
 
-STATUS_RU = {"todo": "к выполнению", "doing": "в работе", "done": "сделано"}
+STATUS_RU = {"todo": "новая", "doing": "в работе", "done": "выполнено"}
 
 
 async def format_open_tasks(
@@ -189,13 +213,21 @@ async def format_open_tasks(
     q = (
         select(Task)
         .where(Task.active.is_(True), Task.status != "done")
-        .options(selectinload(Task.assignee), selectinload(Task.created_by))
+        .options(
+            selectinload(Task.assignee),
+            selectinload(Task.created_by),
+            selectinload(Task.assignees),
+        )
         .order_by(Task.status, Task.id)
     )
-    if assignee is not None:
-        q = q.where(Task.assignee_id == assignee.id)
     tasks = (await session.scalars(q)).all()
-
+    if assignee is not None:
+        tasks = [
+            t
+            for t in tasks
+            if t.assignee_id == assignee.id
+            or any(a.employee_id == assignee.id for a in (t.assignees or []))
+        ]
     if assignee is not None:
         if not tasks:
             return f"У {assignee.name} открытых задач нет."
@@ -251,6 +283,26 @@ async def materialize_and_notify(
 
     async with session_factory() as session:
         await ensure_owner(session, settings.owner_telegram_id)
+        from app.tasks_service import spawn_from_templates
+
+        spawned = await spawn_from_templates(session, today)
+        for task in spawned:
+            try:
+                full = (
+                    await session.scalars(
+                        select(Task)
+                        .where(Task.id == task.id)
+                        .options(
+                            selectinload(Task.assignee),
+                            selectinload(Task.created_by),
+                            selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+                        )
+                    )
+                ).one()
+                await notify_task_assignee(bot=bot, session=session, task=full, due=today)
+            except Exception:  # noqa: BLE001
+                logger.exception("template notify failed task=%s", task.id)
+
         weekly = (
             await session.scalars(select(Task).where(Task.active.is_(True), Task.kind == "weekly"))
         ).all()
@@ -639,9 +691,17 @@ def build_dispatcher(
             if uid not in allowed:
                 await callback.answer("Не твоя задача", show_alert=True)
                 return
+            from app.tasks_service import apply_status
+
             run.status = "done"
             run.completed_at = datetime.utcnow()
-            run.task.status = "done"
+            actor = await find_employee(session, uid)
+            await apply_status(
+                session,
+                run.task,
+                "done",
+                actor_id=actor.id if actor else None,
+            )
             await session.commit()
             name = assignee.name if assignee else "?"
             title = run.task.title

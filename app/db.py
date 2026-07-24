@@ -20,21 +20,44 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # мягкая миграция для уже существующей БД на Railway
         for stmt in (
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by_id INTEGER",
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS articles VARCHAR(500) DEFAULT ''",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_by_id INTEGER",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_date DATE",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'normal'",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INTEGER",
             "ALTER TABLE employees ALTER COLUMN telegram_id TYPE BIGINT",
         ):
             try:
                 await conn.execute(text(stmt))
             except Exception:
                 pass
-    # справочник артикулов из seed
+
     from app.catalog import seed_articles_from_file
 
     async with SessionLocal() as session:
         await seed_articles_from_file(session)
+        # migrate legacy single assignee → task_assignees
+        try:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO task_assignees (task_id, employee_id)
+                    SELECT id, assignee_id FROM tasks
+                    WHERE assignee_id IS NOT NULL
+                      AND NOT EXISTS (
+                        SELECT 1 FROM task_assignees ta
+                        WHERE ta.task_id = tasks.id AND ta.employee_id = tasks.assignee_id
+                      )
+                    """
+                )
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

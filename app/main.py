@@ -76,7 +76,7 @@ async def simple_password(request: Request, call_next):
 
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True, "build": "sku-catalog-2026-07-24"}
+    return {"ok": True, "build": "tasks-core-2026-07-24"}
 
 
 @app.get("/")
@@ -84,5 +84,15 @@ async def index() -> FileResponse:
     return FileResponse(WEB_ROOT / "index.html")
 
 
+@app.get("/static/{file_path:path}")
+async def static_file(file_path: str) -> FileResponse:
+    """Явная раздача web/* — надёжнее, чем только StaticFiles mount."""
+    target = (WEB_ROOT / file_path).resolve()
+    if not str(target).startswith(str(WEB_ROOT.resolve())) or not target.is_file():
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+    return FileResponse(target)
+
+
 if WEB_ROOT.exists():
-    app.mount("/static", StaticFiles(directory=WEB_ROOT), name="static")
+    # fallback mount (если route выше не сматчится в каких-то окружениях)
+    app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
