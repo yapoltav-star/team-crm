@@ -24,6 +24,18 @@ WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    if settings.db_backend == "sqlite":
+        msg = (
+            "DATABASE_URL не задан — используется SQLite. "
+            "На Railway данные (менеджеры, задачи) ПРОПАДУТ при каждом деплое. "
+            "Добавь Postgres и переменную DATABASE_URL."
+        )
+        if settings.on_railway:
+            logger.error(msg)
+            raise RuntimeError(msg)
+        logger.warning(msg)
+    else:
+        logger.info("DB backend: %s", settings.db_backend)
     await init_db()
     scheduler = AsyncIOScheduler(timezone=settings.tz_name)
     bot = None
@@ -76,7 +88,13 @@ async def simple_password(request: Request, call_next):
 
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True, "build": "join-request-2026-07-24"}
+    settings = get_settings()
+    return {
+        "ok": True,
+        "build": "persist-db-2026-07-24",
+        "db": settings.db_backend,
+        "persistent": settings.db_backend == "postgres",
+    }
 
 
 @app.get("/")

@@ -25,13 +25,17 @@ uvicorn app.main:app --reload --port 8000
 
 1. Залей репозиторий на GitHub
 2. [railway.app](https://railway.app) → New Project → Deploy from GitHub → выбери `team-crm`
-3. Add Plugin → **PostgreSQL**
-4. Variables:
+3. **Обязательно:** Add Plugin / Database → **PostgreSQL**
+4. В сервисе `team-crm` → Variables → Connect / Reference → `DATABASE_URL` из Postgres  
+   (без этого менеджеры и задачи стираются при каждом деплое — SQLite в контейнере)
+5. Другие Variables:
    - `TELEGRAM_BOT_TOKEN`
    - `OWNER_TELEGRAM_ID`
    - `TZ=Europe/Moscow`
    - `ESCALATE_TIME=20:00`
-   - `DATABASE_URL` подтянется из Postgres автоматически (если линк сервиса)
-5. Deploy. В Settings → Networking → Generate Domain
+   - `WEB_PASSWORD` (пароль к сайту)
+6. Deploy. Settings → Networking → Generate Domain
+
+Проверка: открой `/health` — должно быть `"db":"postgres","persistent":true`.
 
 Бот и сайт крутятся одним сервисом.

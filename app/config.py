@@ -64,6 +64,21 @@ class Settings(BaseSettings):
         return url
 
     @property
+    def db_backend(self) -> str:
+        url = self.sqlalchemy_url
+        if url.startswith("sqlite"):
+            return "sqlite"
+        if "postgres" in url:
+            return "postgres"
+        return "other"
+
+    @property
+    def on_railway(self) -> bool:
+        import os
+
+        return bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+
+    @property
     def bot_enabled(self) -> bool:
         return bool(self.telegram_bot_token and self.owner_telegram_id)
 
