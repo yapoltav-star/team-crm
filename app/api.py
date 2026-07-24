@@ -4,14 +4,22 @@ import logging
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.catalog import load_catalog
 from app.config import get_settings
 from app.db import SessionLocal, get_session
-from app.models import Employee, Project, Task, TaskAssignee, TaskComment, TaskTemplate
+from app.models import (
+    Employee,
+    EmployeeAccess,
+    Project,
+    Task,
+    TaskAssignee,
+    TaskComment,
+    TaskTemplate,
+)
 from app.notify import notify_task_assignee
 from app.schemas import (
     ArticleOut,
@@ -28,6 +36,7 @@ from app.schemas import (
     TaskIn,
     TaskOut,
     TaskPatch,
+    TeamGroupIn,
     TemplateIn,
     TemplateOut,
     AssigneeOut,
@@ -44,6 +53,48 @@ from app.tasks_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
+
+
+async def _can_see_ids(session: AsyncSession, viewer_id: int) -> list[int]:
+    rows = (
+        await session.scalars(
+            select(EmployeeAccess.subject_id).where(EmployeeAccess.viewer_id == viewer_id)
+        )
+    ).all()
+    return [int(x) for x in rows]
+
+
+async def _employee_out(session: AsyncSession, emp: Employee) -> EmployeeOut:
+    return EmployeeOut(
+        id=emp.id,
+        telegram_id=emp.telegram_id,
+        name=emp.name,
+        role=emp.role,
+        team_group=emp.team_group or "",
+        active=emp.active,
+        can_see_ids=await _can_see_ids(session, emp.id),
+    )
+
+
+async def _visible_subject_ids(
+    session: AsyncSession, viewer: Employee
+) -> set[int] | None:
+    """None = все (владелец). Иначе id сотрудников, чьи задачи видны."""
+    if viewer.role == "owner":
+        return None
+    granted = await _can_see_ids(session, viewer.id)
+    return {viewer.id, *granted}
+
+
+def _task_matches_subjects(task: Task, subject_ids: set[int]) -> bool:
+    ids = {link.employee_id for link in (task.assignees or [])}
+    if task.assignee_id:
+        ids.add(task.assignee_id)
+    if ids & subject_ids:
+        return True
+    if task.created_by_id in subject_ids and not ids:
+        return True
+    return False
 
 
 def _assignees_out(task: Task) -> list[AssigneeOut]:
@@ -136,17 +187,41 @@ def _task_options():
 
 
 @router.get("/board", response_model=BoardOut)
-async def board(session: AsyncSession = Depends(get_session)) -> BoardOut:
+async def board(
+    viewer_id: int | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+) -> BoardOut:
     settings = get_settings()
     today = datetime.now(settings.tz).date()
     projects = (
         await session.scalars(select(Project).where(Project.active.is_(True)).order_by(Project.id))
     ).all()
-    employees = (
+    all_employees = (
         await session.scalars(
             select(Employee).where(Employee.active.is_(True)).order_by(Employee.name)
         )
     ).all()
+
+    viewer: Employee | None = None
+    if viewer_id is not None:
+        viewer = await session.get(Employee, viewer_id)
+        if not viewer or not viewer.active:
+            raise HTTPException(404, "Employee not found")
+
+    if viewer is None:
+        emp_outs = [await _employee_out(session, e) for e in all_employees]
+        return BoardOut(
+            projects=[ProjectOut.model_validate(p) for p in projects],
+            employees=emp_outs,
+            tasks=[],
+        )
+
+    subject_ids = await _visible_subject_ids(session, viewer)
+    if subject_ids is None:
+        visible_employees = all_employees
+    else:
+        visible_employees = [e for e in all_employees if e.id in subject_ids]
+
     tasks = (
         await session.scalars(
             select(Task)
@@ -155,9 +230,15 @@ async def board(session: AsyncSession = Depends(get_session)) -> BoardOut:
             .order_by(Task.position, Task.id)
         )
     ).all()
+    if subject_ids is not None:
+        tasks = [t for t in tasks if _task_matches_subjects(t, subject_ids)]
+
+    emp_source = all_employees if viewer.role == "owner" else visible_employees
+    emp_outs = [await _employee_out(session, e) for e in emp_source]
+
     return BoardOut(
         projects=[ProjectOut.model_validate(p) for p in projects],
-        employees=[EmployeeOut.model_validate(e) for e in employees],
+        employees=emp_outs,
         tasks=[_task_out(t, today=today) for t in tasks],
     )
 
@@ -170,6 +251,11 @@ async def home(
     settings = get_settings()
     today = datetime.now(settings.tz).date()
     soon = today + timedelta(days=7)
+    viewer = await session.get(Employee, employee_id)
+    if not viewer or not viewer.active:
+        raise HTTPException(404, "Employee not found")
+    subject_ids = await _visible_subject_ids(session, viewer)
+
     tasks = (
         await session.scalars(
             select(Task)
@@ -183,12 +269,12 @@ async def home(
         )
     ).all()
 
-    def mine(t: Task) -> bool:
-        if t.assignee_id == employee_id:
-            return True
-        return any(a.employee_id == employee_id for a in (t.assignees or []))
+    if subject_ids is None:
+        mine_ids = {viewer.id}
+        mine_tasks = [t for t in tasks if _task_matches_subjects(t, mine_ids)]
+    else:
+        mine_tasks = [t for t in tasks if _task_matches_subjects(t, subject_ids)]
 
-    mine_tasks = [t for t in tasks if mine(t)]
     return HomeOut(
         new=[_task_out(t, today=today) for t in mine_tasks if t.status == "todo"],
         doing=[_task_out(t, today=today) for t in mine_tasks if t.status == "doing"],
@@ -248,7 +334,7 @@ async def create_employee(
         existing.active = True
         await session.commit()
         await session.refresh(existing)
-        return EmployeeOut.model_validate(existing)
+        return await _employee_out(session, existing)
     role = body.role
     if int(body.telegram_id) == int(settings.owner_telegram_id):
         role = "owner"
@@ -256,7 +342,7 @@ async def create_employee(
     session.add(emp)
     await session.commit()
     await session.refresh(emp)
-    return EmployeeOut.model_validate(emp)
+    return await _employee_out(session, emp)
 
 
 @router.patch("/employees/{employee_id}", response_model=EmployeeOut)
@@ -266,21 +352,99 @@ async def patch_employee(
     emp = await session.get(Employee, employee_id)
     if not emp:
         raise HTTPException(404, "Employee not found")
+
+    actor: Employee | None = None
+    if body.actor_id is not None:
+        actor = await session.get(Employee, body.actor_id)
+
+    needs_owner = (
+        body.team_group is not None
+        or body.can_see_ids is not None
+        or body.active is not None
+    )
+    if needs_owner and (not actor or actor.role != "owner"):
+        raise HTTPException(403, "Только владелец может менять группу и доступы")
+
     if body.name is not None and body.name.strip():
+        if body.actor_id is not None and body.actor_id != employee_id:
+            if not actor or actor.role != "owner":
+                raise HTTPException(403, "Нельзя менять чужое имя")
         emp.name = body.name.strip()[:200]
+    if body.team_group is not None:
+        emp.team_group = body.team_group.strip()[:100]
+    if body.active is not None:
+        emp.active = body.active
+    if body.can_see_ids is not None:
+        await session.execute(delete(EmployeeAccess).where(EmployeeAccess.viewer_id == emp.id))
+        for sid in set(body.can_see_ids):
+            if sid == emp.id:
+                continue
+            subject = await session.get(Employee, sid)
+            if subject and subject.active:
+                session.add(EmployeeAccess(viewer_id=emp.id, subject_id=sid))
+
     await session.commit()
     await session.refresh(emp)
-    return EmployeeOut.model_validate(emp)
+    return await _employee_out(session, emp)
+
+
+@router.post("/team-groups", response_model=list[EmployeeOut])
+async def save_team_group(
+    body: TeamGroupIn, session: AsyncSession = Depends(get_session)
+) -> list[EmployeeOut]:
+    """Создать или обновить группу: название + список участников."""
+    actor = await session.get(Employee, body.actor_id)
+    if not actor or actor.role != "owner":
+        raise HTTPException(403, "Только владелец может управлять группами")
+    name = body.name.strip()[:100]
+    if not name:
+        raise HTTPException(400, "Укажи название группы")
+    old = (body.old_name or "").strip()
+    member_ids = set(body.employee_ids)
+
+    all_emps = (
+        await session.scalars(select(Employee).where(Employee.active.is_(True)))
+    ).all()
+
+    for emp in all_emps:
+        current = (emp.team_group or "").strip()
+        if emp.id in member_ids:
+            emp.team_group = name
+        elif old and current == old:
+            # убрали из группы при редактировании
+            emp.team_group = ""
+        elif not old and current == name and emp.id not in member_ids:
+            # при создании с тем же именем — синхронизируем состав
+            emp.team_group = ""
+
+    await session.commit()
+    refreshed = (
+        await session.scalars(
+            select(Employee).where(Employee.active.is_(True)).order_by(Employee.name)
+        )
+    ).all()
+    return [await _employee_out(session, e) for e in refreshed]
 
 
 @router.get("/tasks/{task_id}", response_model=TaskOut)
-async def get_task(task_id: int, session: AsyncSession = Depends(get_session)) -> TaskOut:
+async def get_task(
+    task_id: int,
+    viewer_id: int | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+) -> TaskOut:
     settings = get_settings()
     today = datetime.now(settings.tz).date()
     try:
         task = await load_task_full(session, task_id)
     except Exception:
         raise HTTPException(404, "Task not found") from None
+    if viewer_id is not None:
+        viewer = await session.get(Employee, viewer_id)
+        if not viewer or not viewer.active:
+            raise HTTPException(404, "Employee not found")
+        subject_ids = await _visible_subject_ids(session, viewer)
+        if subject_ids is not None and not _task_matches_subjects(task, subject_ids):
+            raise HTTPException(403, "Нет доступа к этой задаче")
     return _task_out(task, today=today, with_thread=True)
 
 
@@ -497,6 +661,7 @@ async def archive_months(session: AsyncSession = Depends(get_session)) -> list[d
 async def archive_list(
     year: int = Query(...),
     month: int = Query(..., ge=1, le=12),
+    viewer_id: int | None = Query(None),
     session: AsyncSession = Depends(get_session),
 ) -> list[TaskOut]:
     from app.archive import list_archive_tasks
@@ -504,6 +669,15 @@ async def archive_list(
     settings = get_settings()
     today = datetime.now(settings.tz).date()
     tasks = await list_archive_tasks(session, year=year, month=month)
+    if viewer_id is not None:
+        viewer = await session.get(Employee, viewer_id)
+        if not viewer or not viewer.active:
+            raise HTTPException(404, "Employee not found")
+        subject_ids = await _visible_subject_ids(session, viewer)
+        if subject_ids is not None:
+            tasks = [t for t in tasks if _task_matches_subjects(t, subject_ids)]
+    elif viewer_id is None:
+        tasks = []
     return [_task_out(t, today=today) for t in tasks]
 
 

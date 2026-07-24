@@ -13,6 +13,19 @@ class EmployeeIn(BaseModel):
 
 class EmployeePatch(BaseModel):
     name: str | None = None
+    team_group: str | None = None
+    can_see_ids: list[int] | None = None
+    active: bool | None = None
+    actor_id: int | None = None  # кто меняет (для проверки владельца)
+
+
+class TeamGroupIn(BaseModel):
+    """Создать / переименовать группу и назначить участников (владелец)."""
+
+    name: str
+    employee_ids: list[int] = Field(default_factory=list)
+    old_name: str | None = None  # при переименовании
+    actor_id: int
 
 
 class EmployeeOut(BaseModel):
@@ -20,7 +33,9 @@ class EmployeeOut(BaseModel):
     telegram_id: int
     name: str
     role: str
+    team_group: str = ""
     active: bool
+    can_see_ids: list[int] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 

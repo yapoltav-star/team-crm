@@ -17,7 +17,7 @@
       font-family: "Manrope", system-ui, sans-serif;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=tasks-core-1" />
+  <link rel="stylesheet" href="/static/styles.css?v=groups-ui-2" />
 </head>
 <body>
   <header class="top">
@@ -56,7 +56,10 @@
       <aside class="people">
         <div class="people-head">
           <h2>Команда</h2>
-          <button id="btnAllPeople" type="button" class="ghost">Все</button>
+          <div class="people-head-actions">
+            <button id="btnNewGroup" type="button" class="ghost hidden" title="Создать группу">+ Группа</button>
+            <button id="btnAllPeople" type="button" class="ghost">Все</button>
+          </div>
         </div>
         <div id="peopleList" class="people-list"></div>
       </aside>
@@ -121,7 +124,7 @@
 
   <!-- TASK DRAWER -->
   <dialog id="taskDlg" class="drawer">
-    <form id="dlgForm" method="dialog">
+    <form id="dlgForm">
       <header class="drawer-head">
         <h3 id="dlgTitle">Задача</h3>
         <button type="button" id="dlgClose" class="ghost">✕</button>
@@ -186,9 +189,54 @@
     </form>
   </dialog>
 
+  <!-- EMPLOYEE EDIT (owner) -->
+  <dialog id="empDlg">
+    <form id="empForm">
+      <h3 id="empDlgTitle">Менеджер</h3>
+      <input type="hidden" name="id" />
+      <label>Имя
+        <input name="name" required autocomplete="off" />
+      </label>
+      <label>Группа
+        <input name="team_group" list="groupSuggestions" placeholder="например Склад, Закупки" autocomplete="off" />
+        <datalist id="groupSuggestions"></datalist>
+      </label>
+      <fieldset class="assignees-box">
+        <legend>Видит задачи сотрудников</legend>
+        <p class="field-hint">По умолчанию — только свои. Отметь, чьи задачи ещё можно смотреть на доске.</p>
+        <div id="empAccessChecks" class="check-list"></div>
+      </fieldset>
+      <menu>
+        <button type="button" id="empCancel" class="ghost">Отмена</button>
+        <button type="submit">Сохранить</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <!-- GROUP CREATE / EDIT (owner) -->
+  <dialog id="groupDlg">
+    <form id="groupForm">
+      <h3 id="groupDlgTitle">Группа</h3>
+      <input type="hidden" name="old_name" />
+      <label>Название группы
+        <input name="name" required autocomplete="off" placeholder="например Склад" />
+      </label>
+      <fieldset class="assignees-box">
+        <legend>Участники</legend>
+        <p class="field-hint">Отметь менеджеров, которые входят в эту группу.</p>
+        <div id="groupMemberChecks" class="check-list"></div>
+      </fieldset>
+      <menu>
+        <button type="button" id="groupDelete" class="danger ghost hidden">Расформировать</button>
+        <button type="button" id="groupCancel" class="ghost">Отмена</button>
+        <button type="submit">Сохранить</button>
+      </menu>
+    </form>
+  </dialog>
+
   <!-- TEMPLATE DIALOG -->
   <dialog id="tplDlg">
-    <form id="tplForm" method="dialog">
+    <form id="tplForm">
       <h3 id="tplDlgTitle">Шаблон</h3>
       <input type="hidden" name="id" />
       <label>Название
@@ -231,6 +279,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=tasks-core-1"></script>
+  <script src="/static/app.js?v=groups-ui-2"></script>
 </body>
 </html>

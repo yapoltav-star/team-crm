@@ -231,7 +231,7 @@ async def health() -> dict:
     settings = get_settings()
     return {
         "ok": True,
-        "build": "archive-scroll-2026-07-24",
+        "build": "groups-ui-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "auth": bool(str(settings.web_password or "").strip()),

@@ -170,40 +170,190 @@ function fillSelects() {
   pf.value = cur;
 }
 
+function isOwner() {
+  return me()?.role === "owner";
+}
+
+function visiblePeople() {
+  const all = people();
+  if (isOwner()) return all;
+  const m = me();
+  if (!m) return [];
+  const allowed = new Set([m.id, ...(m.can_see_ids || [])]);
+  return all.filter((e) => allowed.has(e.id));
+}
+
+function peopleGroups(list) {
+  const map = new Map();
+  for (const e of list) {
+    const g = String(e.team_group || "").trim() || "Без группы";
+    if (!map.has(g)) map.set(g, []);
+    map.get(g).push(e);
+  }
+  return [...map.entries()].sort((a, b) => {
+    if (a[0] === "Без группы") return 1;
+    if (b[0] === "Без группы") return -1;
+    return a[0].localeCompare(b[0], "ru");
+  });
+}
+
 function updateMeLabel() {
   const m = me();
   $("#meLabel").textContent = m ? `вы: ${m.name}` : "не вошли";
+  $("#btnNewManager")?.classList.toggle("hidden", Boolean(m && !isOwner()));
+  $("#btnNewGroup")?.classList.toggle("hidden", !isOwner());
 }
 
 function renderPeople() {
   const list = $("#peopleList");
   list.innerHTML = "";
-  const all = people();
+  const all = visiblePeople();
   if (!all.length) {
-    list.innerHTML = `<div class="people-empty">Пока никого нет.<br/>Добавь менеджера или войди.</div>`;
+    list.innerHTML = `<div class="people-empty">${
+      state.meId
+        ? "Нет доступных людей."
+        : "Пока никого нет.<br/>Добавь менеджера или войди."
+    }</div>`;
     return;
   }
-  for (const m of all) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className =
-      "person" + (String(state.selectedPersonId) === String(m.id) ? " active" : "");
-    const open = openCount(m.id);
-    const role = m.role === "owner" ? "владелец" : "менеджер";
-    btn.innerHTML = `
-      <span>
-        <span class="person-name">${escapeHtml(m.name)}</span>
-        <span class="person-role">${role}</span>
-      </span>
-      <span class="person-count">${open}</span>
-    `;
-    btn.addEventListener("click", () => {
-      state.selectedPersonId = m.id;
-      $("#assignTo").value = "selected";
-      renderBoardView();
-    });
-    list.appendChild(btn);
+  const owner = isOwner();
+  for (const [groupName, members] of peopleGroups(all)) {
+    const wrap = document.createElement("div");
+    wrap.className = "people-group";
+    const head = document.createElement("div");
+    head.className = "people-group-head";
+    const title = document.createElement("div");
+    title.className = "people-group-title";
+    title.textContent = groupName;
+    head.appendChild(title);
+    if (owner && groupName !== "Без группы") {
+      const editGrp = document.createElement("button");
+      editGrp.type = "button";
+      editGrp.className = "ghost people-group-edit";
+      editGrp.title = "Переименовать / состав";
+      editGrp.textContent = "✎";
+      editGrp.addEventListener("click", () => openGroupDialog(groupName));
+      head.appendChild(editGrp);
+    }
+    wrap.appendChild(head);
+
+    for (const m of members) {
+      const row = document.createElement("div");
+      row.className =
+        "person" + (String(state.selectedPersonId) === String(m.id) ? " active" : "");
+      const open = openCount(m.id);
+      const role = m.role === "owner" ? "владелец" : "менеджер";
+      const main = document.createElement("button");
+      main.type = "button";
+      main.className = "person-main";
+      main.innerHTML = `
+        <span>
+          <span class="person-name">${escapeHtml(m.name)}</span>
+          <span class="person-role">${role}</span>
+        </span>
+        <span class="person-count">${open}</span>
+      `;
+      main.addEventListener("click", () => {
+        state.selectedPersonId = m.id;
+        $("#assignTo").value = "selected";
+        renderBoardView();
+      });
+      row.appendChild(main);
+      if (owner) {
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "ghost person-edit";
+        edit.title = "Имя и доступы";
+        edit.textContent = "✎";
+        edit.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openEmployeeDialog(m);
+        });
+        row.appendChild(edit);
+      }
+      wrap.appendChild(row);
+    }
+    list.appendChild(wrap);
   }
+}
+
+function openGroupDialog(existingName) {
+  if (!isOwner()) {
+    alert("Только владелец может управлять группами. Нажми «Войти» своим Telegram id.");
+    return;
+  }
+  const form = $("#groupForm");
+  const old = existingName && existingName !== "Без группы" ? existingName : "";
+  form.elements.old_name.value = old;
+  form.elements.name.value = old;
+  $("#groupDlgTitle").textContent = old ? `Группа «${old}»` : "Новая группа";
+  $("#groupDelete").classList.toggle("hidden", !old);
+  const selected = new Set(
+    people()
+      .filter((e) => String(e.team_group || "").trim() === old)
+      .map((e) => e.id)
+  );
+  $("#groupMemberChecks").innerHTML = people()
+    .map(
+      (e) => `
+    <label class="check-row">
+      <input type="checkbox" value="${e.id}" ${selected.has(e.id) ? "checked" : ""} />
+      <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
+      ${escapeHtml(e.name)}
+      ${e.role === "owner" ? " (владелец)" : ""}
+    </label>`
+    )
+    .join("");
+  $("#groupDlg").showModal();
+  form.elements.name.focus();
+}
+
+function openEmployeeDialog(emp) {
+  const form = $("#empForm");
+  form.elements.id.value = emp.id;
+  form.elements.name.value = emp.name || "";
+  form.elements.team_group.value = emp.team_group || "";
+  $("#empDlgTitle").textContent = emp.name || "Сотрудник";
+  const accessBox = $("#empAccessChecks");
+  const accessField = accessBox?.closest("fieldset");
+  if (emp.role === "owner") {
+    if (accessField) accessField.classList.add("hidden");
+  } else {
+    if (accessField) accessField.classList.remove("hidden");
+    const others = people().filter((e) => e.id !== emp.id);
+    const selected = new Set((emp.can_see_ids || []).map(Number));
+    accessBox.innerHTML = others.length
+      ? others
+          .map(
+            (e) => `
+      <label class="check-row">
+        <input type="checkbox" value="${e.id}" ${selected.has(e.id) ? "checked" : ""} />
+        <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
+        ${escapeHtml(e.name)}
+        ${e.role === "owner" ? " (владелец)" : ""}
+      </label>`
+          )
+          .join("")
+      : `<div class="chat-empty">Пока некого добавлять</div>`;
+  }
+  const groups = [
+    ...new Set(
+      people()
+        .map((e) => String(e.team_group || "").trim())
+        .filter(Boolean)
+    ),
+  ].sort((a, b) => a.localeCompare(b, "ru"));
+  $("#groupSuggestions").innerHTML = groups
+    .map((g) => `<option value="${escapeHtml(g)}"></option>`)
+    .join("");
+  $("#empDlg").showModal();
+}
+
+function closeDlg() {
+  const dlg = $("#taskDlg");
+  if (dlg?.open) dlg.close();
+  document.body.classList.remove("dlg-open");
+  state.currentTask = null;
 }
 
 function renderManagerBar() {
@@ -449,7 +599,9 @@ async function renderArchive() {
     .join("");
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
   const [y, mo] = sel.value.split("-").map(Number);
-  const tasks = await api(`/api/archive?year=${y}&month=${mo}`);
+  const tasks = await api(
+    `/api/archive?year=${y}&month=${mo}${state.meId ? `&viewer_id=${state.meId}` : ""}`
+  );
   if (!tasks.length) {
     list.innerHTML = `<div class="home-empty">В этом месяце пусто.</div>`;
     return;
@@ -493,7 +645,8 @@ function resolveAssigneeId(mode) {
 function fillAssigneeChecks(containerId, selectedIds) {
   const box = $(containerId);
   const selected = new Set((selectedIds || []).map(Number));
-  box.innerHTML = people()
+  const list = isOwner() ? people() : visiblePeople();
+  box.innerHTML = list
     .map(
       (e) => `
       <label class="check-row">
@@ -571,7 +724,8 @@ function renderEvents(task) {
 }
 
 async function openTaskDialog(taskId) {
-  const task = await api(`/api/tasks/${taskId}`);
+  const q = state.meId ? `?viewer_id=${state.meId}` : "";
+  const task = await api(`/api/tasks/${taskId}${q}`);
   state.currentTask = task;
   const dlg = $("#taskDlg");
   const form = $("#dlgForm");
@@ -607,9 +761,7 @@ async function deleteTask(task) {
   if (!confirm(`Удалить задачу «${task.title}»?\nУдалить может любой из команды.`)) return;
   const q = state.meId ? `?actor_id=${state.meId}` : "";
   await api(`/api/tasks/${task.id}${q}`, { method: "DELETE" });
-  $("#taskDlg").close();
-  document.body.classList.remove("dlg-open");
-  state.currentTask = null;
+  closeDlg();
   await load();
 }
 
@@ -662,14 +814,15 @@ async function loadTemplates() {
 }
 
 async function load() {
-  state.board = await api("/api/board");
+  const q = state.meId ? `?viewer_id=${state.meId}` : "";
+  state.board = await api(`/api/board${q}`);
   if (state.meId && !people().some((e) => e.id === state.meId)) {
     state.meId = null;
     localStorage.removeItem("crm_me_id");
   }
   if (
     state.selectedPersonId &&
-    !people().some((e) => e.id === state.selectedPersonId)
+    !visiblePeople().some((e) => e.id === state.selectedPersonId)
   ) {
     state.selectedPersonId = null;
   }
@@ -827,17 +980,22 @@ $("#btnNewManager").addEventListener("click", async () => {
   );
 });
 
-$("#dlgCancel").addEventListener("click", () => {
-  $("#taskDlg").close();
-  document.body.classList.remove("dlg-open");
+$("#dlgCancel").addEventListener("click", (e) => {
+  e.preventDefault();
+  closeDlg();
 });
-$("#dlgClose").addEventListener("click", () => {
-  $("#taskDlg").close();
-  document.body.classList.remove("dlg-open");
+$("#dlgClose").addEventListener("click", (e) => {
+  e.preventDefault();
+  closeDlg();
 });
 
 $("#taskDlg").addEventListener("close", () => {
   document.body.classList.remove("dlg-open");
+  state.currentTask = null;
+});
+
+$("#taskDlg").addEventListener("click", (e) => {
+  if (e.target === $("#taskDlg")) closeDlg();
 });
 
 $("#taskDlg").addEventListener(
@@ -847,6 +1005,99 @@ $("#taskDlg").addEventListener(
   },
   { passive: true }
 );
+
+$("#empCancel")?.addEventListener("click", () => $("#empDlg").close());
+
+$("#btnNewGroup")?.addEventListener("click", () => openGroupDialog(""));
+
+$("#groupCancel")?.addEventListener("click", () => $("#groupDlg").close());
+
+$("#groupDelete")?.addEventListener("click", async () => {
+  const form = $("#groupForm");
+  const old = String(form.elements.old_name.value || "").trim();
+  if (!old || !state.meId) return;
+  if (!confirm(`Расформировать группу «${old}»?\nЛюди останутся в команде без группы.`)) return;
+  try {
+    await api("/api/team-groups", {
+      method: "POST",
+      body: JSON.stringify({
+        name: old,
+        old_name: old,
+        employee_ids: [],
+        actor_id: state.meId,
+      }),
+    });
+    $("#groupDlg").close();
+    await load();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
+
+$("#groupForm")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!isOwner() || !state.meId) {
+    alert("Только владелец может управлять группами. Нажми «Войти».");
+    return;
+  }
+  const form = e.target;
+  const name = String(form.elements.name.value || "").trim();
+  if (!name) {
+    alert("Введи название группы");
+    return;
+  }
+  const employee_ids = [
+    ...document.querySelectorAll("#groupMemberChecks input:checked"),
+  ].map((el) => Number(el.value));
+  try {
+    await api("/api/team-groups", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        old_name: String(form.elements.old_name.value || "").trim() || null,
+        employee_ids,
+        actor_id: state.meId,
+      }),
+    });
+    $("#groupDlg").close();
+    await load();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
+
+$("#empForm")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!isOwner() || !state.meId) {
+    alert("Только владелец может редактировать доступы");
+    return;
+  }
+  const form = e.target;
+  const id = Number(form.elements.id.value);
+  const emp = people().find((e) => e.id === id);
+  const can_see_ids =
+    emp?.role === "owner"
+      ? undefined
+      : [...document.querySelectorAll("#empAccessChecks input:checked")].map((el) =>
+          Number(el.value)
+        );
+  try {
+    const body = {
+      name: String(form.elements.name.value || "").trim(),
+      team_group: String(form.elements.team_group.value || "").trim(),
+      actor_id: state.meId,
+    };
+    if (can_see_ids !== undefined) body.can_see_ids = can_see_ids;
+    await api(`/api/employees/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    $("#empDlg").close();
+    await load();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
 
 $("#archiveMonth")?.addEventListener("change", () => {
   if (state.view === "archive") renderArchive();
@@ -890,8 +1141,7 @@ $("#dlgForm").addEventListener("submit", async (e) => {
       method: "PATCH",
       body: JSON.stringify(body),
     });
-    $("#taskDlg").close();
-    document.body.classList.remove("dlg-open");
+    closeDlg();
     await load();
   } catch (err) {
     alert(err.message || String(err));

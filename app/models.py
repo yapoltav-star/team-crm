@@ -27,6 +27,7 @@ class Employee(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     role: Mapped[str] = mapped_column(String(20), default="manager")  # owner|manager
+    team_group: Mapped[str] = mapped_column(String(100), default="")  # группа в «Команда»
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -35,6 +36,28 @@ class Employee(Base):
         foreign_keys="Task.assignee_id",
     )
     task_links: Mapped[list[TaskAssignee]] = relationship(back_populates="employee")
+    access_grants: Mapped[list[EmployeeAccess]] = relationship(
+        back_populates="viewer",
+        foreign_keys="EmployeeAccess.viewer_id",
+        cascade="all, delete-orphan",
+    )
+
+
+class EmployeeAccess(Base):
+    """Менеджер (viewer) может видеть задачи сотрудника (subject)."""
+
+    __tablename__ = "employee_access"
+    __table_args__ = (UniqueConstraint("viewer_id", "subject_id", name="uq_viewer_subject"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    viewer_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+
+    viewer: Mapped[Employee] = relationship(
+        back_populates="access_grants",
+        foreign_keys=[viewer_id],
+    )
+    subject: Mapped[Employee] = relationship(foreign_keys=[subject_id])
 
 
 class Project(Base):

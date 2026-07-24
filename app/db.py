@@ -31,6 +31,15 @@ async def init_db() -> None:
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP",
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INTEGER",
             "ALTER TABLE employees ALTER COLUMN telegram_id TYPE BIGINT",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_group VARCHAR(100) DEFAULT ''",
+            """
+            CREATE TABLE IF NOT EXISTS employee_access (
+                id SERIAL PRIMARY KEY,
+                viewer_id INTEGER NOT NULL REFERENCES employees(id),
+                subject_id INTEGER NOT NULL REFERENCES employees(id),
+                UNIQUE (viewer_id, subject_id)
+            )
+            """,
         ):
             try:
                 await conn.execute(text(stmt))
