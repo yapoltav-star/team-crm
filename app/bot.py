@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import socket
 from datetime import date, datetime
 
@@ -151,8 +152,9 @@ async def create_and_notify(
     bot: Bot,
     settings: Settings,
     title: str,
-    assignee: Employee,
     author: Employee,
+    assignee: Employee | None = None,
+    assignees: list[Employee] | None = None,
     kind: str = "once",
     weekdays: str = "",
     notify_time: str | None = None,
@@ -163,6 +165,15 @@ async def create_and_notify(
     """Returns (task, notify_ok, notify_err, clarify_msg). clarify_msg => task not created."""
     from app.catalog import load_catalog
     from app.sku import enrich_task_text
+
+    targets: list[Employee] = []
+    seen: set[int] = set()
+    for emp in list(assignees or []) + ([assignee] if assignee else []):
+        if emp and emp.id not in seen:
+            seen.add(emp.id)
+            targets.append(emp)
+    if not targets:
+        return None, False, "Нет исполнителей", None
 
     catalog = await load_catalog(session)
     title2, arts, clarify = enrich_task_text(title, catalog)
@@ -178,10 +189,11 @@ async def create_and_notify(
     due = None
     if kind == "once":
         due = resolve_due_date(today, text=title, explicit=due_date, hint=due_hint)
+    primary = targets[0]
     task = Task(
         title=title,
         articles=articles or "",
-        assignee_id=assignee.id,
+        assignee_id=primary.id,
         created_by_id=author.id,
         status="todo",
         kind=kind,
@@ -202,7 +214,9 @@ async def create_and_notify(
             )
         )
     ).one()
-    await set_assignees(session, task, [assignee.id], actor_id=author.id, log=True)
+    await set_assignees(
+        session, task, [e.id for e in targets], actor_id=author.id, log=True
+    )
     await add_event(
         session, task.id, f"Создана — {author.name}", kind="created", actor_id=author.id
     )
@@ -435,6 +449,7 @@ def build_dispatcher(
         "/todo текст — себе\n"
         "/boss текст — владельцу\n"
         "/for <id> | текст — человеку\n"
+        "Или текстом: «поставь задачу всем проверить отзывы»\n"
         "/my — мои открытые\n"
         "/team — у кого что\n"
         "/name Имя — как тебя зовут в CRM\n"
@@ -954,6 +969,33 @@ def build_dispatcher(
                 return p
         return None
 
+    def _is_all_token(token: str) -> bool:
+        t = (token or "").strip().lower()
+        return t in {
+            "all",
+            "team",
+            "всем",
+            "всех",
+            "все",
+            "команде",
+            "команда",
+            "everyone",
+            "на всех",
+            "для всех",
+        }
+
+    def _resolve_assignees(
+        people: list[Employee], token: str, author: Employee, *, raw_text: str = ""
+    ) -> list[Employee] | None:
+        blob = f"{token} {raw_text}".lower()
+        if _is_all_token(token) or re.search(
+            r"(?i)(?<![а-яa-z])(всем|всех|на\s+всех|для\s+всех|всей\s+команде|команде)(?![а-яa-z])",
+            blob,
+        ):
+            return list(people) if people else None
+        one = _match_assignee(people, token, author)
+        return [one] if one else None
+
     async def _handle_natural(message: Message, text: str) -> None:
         if not message.from_user or not text.strip():
             return
@@ -979,24 +1021,59 @@ def build_dispatcher(
                 from app.nlp import parse_intent
 
                 is_owner = message.from_user.id == settings.owner_telegram_id
-                intent = await parse_intent(
-                    settings,
-                    text=text,
-                    author_name=author.name,
-                    people=[{"name": p.name, "role": p.role} for p in people],
-                    is_owner=is_owner,
+                # быстрый путь без LLM: «поставь задачу всем …»
+                m_all = re.search(
+                    r"(?i)^\s*(?:поставь|назначь|создай)?\s*"
+                    r"(?:задач[ауе]?\s+)?"
+                    r"(?:всем|на\s+всех|для\s+всех|всей\s+команде)\s*[:\-]?\s*(.+)$",
+                    text.strip(),
                 )
+                if m_all and m_all.group(1).strip():
+                    intent = {
+                        "action": "create_task",
+                        "title": m_all.group(1).strip(),
+                        "assignee": "all",
+                        "due": "default",
+                    }
+                else:
+                    intent = await parse_intent(
+                        settings,
+                        text=text,
+                        author_name=author.name,
+                        people=[{"name": p.name, "role": p.role} for p in people],
+                        is_owner=is_owner,
+                    )
                 action = intent.get("action")
                 if action == "create_task":
                     title = str(intent.get("title") or "").strip()
                     token = str(intent.get("assignee") or "me")
                     if not title:
+                        # иногда модель кладёт всё в assignee — вытащим из исходного текста
+                        m = re.search(
+                            r"(?i)(?:задач[ау]|поставь|назначь)\s+(.+)$", text.strip()
+                        )
+                        title = (m.group(1) if m else text).strip()
+                        title = re.sub(
+                            r"(?i)\b(всем|всех|на\s+всех|для\s+всех|команде)\b",
+                            "",
+                            title,
+                        ).strip(" .,!—-")
+                    if not title:
                         await wait.edit_text("Не увидел текст задачи. Сформулируй ещё раз.")
                         return
-                    assignee = _match_assignee(list(people), token, author)
-                    if not assignee:
+                    # «всем» часто теряется в tool — дублируем эвристикой по исходному тексту
+                    if re.search(
+                        r"(?i)(?<![а-яa-z])(всем|всех|на\s+всех|для\s+всех|всей\s+команде)(?![а-яa-z])",
+                        text,
+                    ):
+                        token = "all"
+                    targets = _resolve_assignees(
+                        list(people), token, author, raw_text=text
+                    )
+                    if not targets:
                         await wait.edit_text(
-                            f"Не понял, кому задача («{token}»). Назови имя из команды или скажи «себе»/«боссу»."
+                            f"Не понял, кому задача («{token}»). "
+                            "Назови имя, «себе», «боссу» или «всем»."
                         )
                         return
                     due_hint = str(intent.get("due") or "default")
@@ -1005,7 +1082,7 @@ def build_dispatcher(
                         bot=message.bot,
                         settings=settings,
                         title=title,
-                        assignee=assignee,
+                        assignees=targets,
                         author=author,
                         due_hint=due_hint,
                     )
@@ -1014,10 +1091,11 @@ def build_dispatcher(
                         if task and task.due_date
                         else "—"
                     )
-                    text = (
-                        f"Готово: задача для {assignee.name}\n«{title}»\n"
-                        f"Срок: {due_txt}"
-                    )
+                    if len(targets) == 1:
+                        who = targets[0].name
+                    else:
+                        who = f"всем ({len(targets)} чел.)"
+                    text = f"Готово: задача для {who}\n«{title}»\nСрок: {due_txt}"
                     if not ok:
                         text += f"\n\n⚠️ В Telegram не ушло: {err or 'неизвестно'}"
                     await wait.edit_text(text)

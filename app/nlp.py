@@ -16,14 +16,20 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_task",
-            "description": "Создать задачу сотруднику или себе",
+            "description": (
+                "Создать задачу сотруднику, себе или всей команде. "
+                "Если сказали «всем», «всех», «команде» — assignee=all."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Текст задачи"},
                     "assignee": {
                         "type": "string",
-                        "description": "me | boss | имя сотрудника из списка",
+                        "description": (
+                            "me | boss | all | имя сотрудника. "
+                            "all — когда «всем», «всех», «на всех», «команде»"
+                        ),
                     },
                     "due": {
                         "type": "string",
@@ -142,7 +148,8 @@ async def parse_intent(
     system = (
         "Ты ассистент task-CRM в Telegram. Пользователь пишет текстом или голосом.\n"
         f"Автор: {author_name} — {role}. Сотрудники: {names}.\n"
-        "Создать задачу → create_task (assignee=me|boss|имя).\n"
+        "Создать задачу → create_task (assignee=me|boss|all|имя).\n"
+        "«поставь задачу всем / на всех / команде» → assignee=all (одна задача на всю команду).\n"
         "Если сказал «сегодня»/«завтра» — due=today|tomorrow, иначе due=default.\n"
         "В title можно писать короткий артикул: «042 голд», «041 серый» — "
         "система сама развернёт в полный vendorCode; не выдумывай артикулы.\n"
