@@ -1081,7 +1081,7 @@ def build_dispatcher(
         await state.set_state(CommentForm.waiting)
         await state.update_data(task_id=task_id, reason="after_create")
         await callback.answer()
-        prompt = "Напиши комментарий одним сообщением (или /cancel)."
+        prompt = "Напиши комментарий текстом или голосовым (или /cancel)."
         if callback.message:
             try:
                 await callback.message.edit_text(prompt)
@@ -1145,15 +1145,48 @@ def build_dispatcher(
             return
         if message.text.startswith("/"):
             return
+        await _finish_pending_comment(message, state, message.text.strip())
+
+    @dp.message(StateFilter(CommentForm.waiting), F.voice)
+    async def on_comment_voice(message: Message, state: FSMContext) -> None:
+        if not message.from_user or not message.voice:
+            return
+        if not settings.nlp_enabled:
+            await message.answer(
+                "Голосовые комментарии нужны OPENAI_API_KEY. Напиши текстом или /cancel."
+            )
+            return
+        wait = await message.answer("Слушаю комментарий…")
+        try:
+            file = await message.bot.get_file(message.voice.file_id)
+            buf = await message.bot.download_file(file.file_path)
+            ogg = buf.read() if hasattr(buf, "read") else bytes(buf)
+            from app.nlp import transcribe_voice
+
+            text = await transcribe_voice(settings, ogg)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("comment whisper failed")
+            await wait.edit_text(f"Не распознал голос: {exc}\nНапиши текстом или /cancel.")
+            return
+        if not text or not text.strip():
+            await wait.edit_text("Пустая расшифровка — повтори голосом или напиши текстом.")
+            return
+        await wait.edit_text(f"Распознал комментарий: {text}")
+        await _finish_pending_comment(message, state, text.strip())
+
+    async def _finish_pending_comment(
+        message: Message, state: FSMContext, body: str
+    ) -> None:
+        if not message.from_user:
+            return
+        if len(body) < 1:
+            await message.answer("Пустой комментарий — напиши текст или пришли голосовое.")
+            return
         data = await state.get_data()
         task_id = int(data.get("task_id") or 0)
         if not task_id:
             await state.clear()
             await message.answer("Не нашёл задачу для комментария.")
-            return
-        body = message.text.strip()
-        if len(body) < 1:
-            await message.answer("Пустой комментарий — напиши текст.")
             return
         async with session_factory() as session:
             author = await _author(session, message.from_user)
