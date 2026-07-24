@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -74,13 +74,14 @@ async def set_assignees(
         if i and i not in seen:
             seen.add(i)
             ids.append(i)
-    # clear existing
-    for link in list(task.assignees):
-        await session.delete(link)
+    # без lazy-load (async → MissingGreenlet)
+    await session.execute(delete(TaskAssignee).where(TaskAssignee.task_id == task.id))
     await session.flush()
     for eid in ids:
         session.add(TaskAssignee(task_id=task.id, employee_id=eid))
     task.assignee_id = ids[0] if ids else None
+    # сбросить кэш relationship, если был
+    session.expire(task, ["assignees"])
     if log and ids:
         people = (
             await session.scalars(select(Employee).where(Employee.id.in_(ids)))

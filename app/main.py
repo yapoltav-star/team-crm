@@ -162,7 +162,7 @@ async def health(request: Request) -> dict:
         }
     return {
         "ok": True,
-        "build": "stock-health-2026-07-24",
+        "build": "fix-set-assignees-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "stock_watch": settings.stock_watch_enabled,
