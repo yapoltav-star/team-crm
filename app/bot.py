@@ -240,9 +240,16 @@ async def create_and_notify(
             session=session,
             task=task,
             due=task.due_date or today,
+            employees=targets,
         )
         if not ok and err:
             logger.warning("bot notify failed: %s", err)
+        else:
+            logger.info(
+                "notified task=%s people=%s",
+                task.id,
+                ",".join(str(e.telegram_id) for e in targets),
+            )
     return task, ok, err, None
 
 async def _reply_created(message: Message, ok: bool, err: str | None, ok_text: str) -> None:
@@ -377,31 +384,26 @@ async def materialize_and_notify(
                 .options(
                     selectinload(TaskRun.task).selectinload(Task.assignee),
                     selectinload(TaskRun.task).selectinload(Task.created_by),
+                    selectinload(TaskRun.task)
+                    .selectinload(Task.assignees)
+                    .selectinload(TaskAssignee.employee),
                 )
             )
         ).all()
         for run in runs:
             task = run.task
-            if not task or not task.assignee:
+            if not task:
                 continue
-            author = task.created_by.name if task.created_by else "CRM"
-            text = (
-                f"📋 Задача на сегодня ({today.isoformat()}) от <b>{author}</b>\n"
-                f"<b>{task.title}</b>\n\n"
-                "Жми «В работе» или «Сделано»."
+            ok, err = await notify_task_assignee(
+                bot=bot,
+                session=session,
+                task=task,
+                due=today,
             )
-            try:
-                await bot.send_message(
-                    task.assignee.telegram_id,
-                    text,
-                    reply_markup=task_action_kb(
-                        int(run.id), int(task.id), status=task.status or "todo"
-                    ),
-                    parse_mode="HTML",
-                )
+            if ok:
                 run.notified_at = datetime.utcnow()
-            except Exception:  # noqa: BLE001
-                logger.exception("notify failed run=%s", run.id)
+            elif err:
+                logger.warning("daily notify run=%s: %s", run.id, err)
         await session.commit()
 
         if hm >= settings.escalate_time:
@@ -1094,9 +1096,14 @@ def build_dispatcher(
                     if len(targets) == 1:
                         who = targets[0].name
                     else:
-                        who = f"всем ({len(targets)} чел.)"
+                        names = ", ".join(e.name for e in targets)
+                        who = f"всем ({len(targets)}): {names}"
                     text = f"Готово: задача для {who}\n«{title}»\nСрок: {due_txt}"
-                    if not ok:
+                    if ok and not err:
+                        text += f"\n📬 Уведомления: {len(targets)} из {len(targets)}"
+                    elif ok and err:
+                        text += f"\n\n⚠️ {err}"
+                    elif not ok:
                         text += f"\n\n⚠️ В Telegram не ушло: {err or 'неизвестно'}"
                     await wait.edit_text(text)
                     return

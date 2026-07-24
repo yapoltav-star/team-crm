@@ -81,10 +81,20 @@ async def notify_task_assignee(
     session: AsyncSession,
     task: Task,
     due: date,
+    employees: list[Employee] | None = None,
 ) -> tuple[bool, str | None]:
     if not bot:
         return False, "Бот не запущен на сервере"
-    targets = _targets(task)
+    # явный список важнее — чтобы «всем» точно ушло каждому
+    if employees:
+        seen: set[int] = set()
+        targets: list[Employee] = []
+        for emp in employees:
+            if emp and emp.id not in seen:
+                seen.add(emp.id)
+                targets.append(emp)
+    else:
+        targets = _targets(task)
     if not targets:
         return False, "У задачи нет исполнителя"
 
