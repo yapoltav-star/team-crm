@@ -63,6 +63,11 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Bot disabled: set TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_ID")
 
+    app.state.bot = bot
+    app.state.scheduler = scheduler
+    app.state.dp = dp
+    app.state.last_stock_watch = None
+
     if settings.stock_watch_enabled and settings.wb_dashboard_url:
         from app.stock_watch import run_stock_watch
 
@@ -70,8 +75,9 @@ async def lifespan(app: FastAPI):
             result = await run_stock_watch(
                 session_factory=SessionLocal,
                 settings=settings,
-                bot=bot,
+                bot=getattr(app.state, "bot", None),
             )
+            app.state.last_stock_watch = result
             logger.info("stock_watch: %s", result)
 
         scheduler.add_job(
@@ -95,18 +101,15 @@ async def lifespan(app: FastAPI):
         from app.stock_watch import run_stock_watch
 
         try:
-            logger.info(
-                "stock_watch first run: %s",
-                await run_stock_watch(
-                    session_factory=SessionLocal, settings=settings, bot=bot
-                ),
+            result = await run_stock_watch(
+                session_factory=SessionLocal, settings=settings, bot=bot
             )
-        except Exception:  # noqa: BLE001
+            app.state.last_stock_watch = result
+            logger.info("stock_watch first run: %s", result)
+        except Exception as exc:  # noqa: BLE001
             logger.exception("stock_watch first run failed")
+            app.state.last_stock_watch = {"ok": False, "error": str(exc)}
 
-    app.state.bot = bot
-    app.state.scheduler = scheduler
-    app.state.dp = dp
     yield
 
     if scheduler.running:
@@ -142,14 +145,29 @@ async def simple_password(request: Request, call_next):
 
 
 @app.get("/health")
-async def health() -> dict:
+async def health(request: Request) -> dict:
     settings = get_settings()
+    last = getattr(request.app.state, "last_stock_watch", None)
+    # короткий итог без огромного списка
+    last_summary = None
+    if isinstance(last, dict):
+        last_summary = {
+            "ok": last.get("ok"),
+            "error": last.get("error"),
+            "critical_total": last.get("critical_total"),
+            "created": len(last.get("created") or []),
+            "skipped_existing": last.get("skipped_existing"),
+            "as_of": last.get("as_of"),
+            "mode": last.get("mode"),
+        }
     return {
         "ok": True,
-        "build": "own-warehouse-watch-2026-07-24",
+        "build": "stock-health-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "stock_watch": settings.stock_watch_enabled,
+        "stock_interval_min": settings.stock_watch_interval_minutes,
+        "stock_last": last_summary,
     }
 
 
