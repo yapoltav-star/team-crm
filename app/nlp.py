@@ -17,18 +17,24 @@ TOOLS = [
         "function": {
             "name": "create_task",
             "description": (
-                "Создать задачу сотруднику, себе или всей команде. "
-                "Если сказали «всем», «всех», «команде» — assignee=all."
+                "Создать задачу сотруднику, группе или всей команде. "
+                "«всем» / «всех» без проекта — assignee=all. "
+                "«менеджерам ПВС» / «складу на ПВС» — assignee вида «ПВС/менеджер» "
+                "(проект/роль), НЕ all."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string", "description": "Текст задачи"},
+                    "title": {
+                        "type": "string",
+                        "description": "Текст задачи БЕЗ адресата (без «менеджерам ПВС»)",
+                    },
                     "assignee": {
                         "type": "string",
                         "description": (
-                            "me | boss | all | имя сотрудника. "
-                            "all — когда «всем», «всех», «на всех», «команде»"
+                            "me | boss | all | имя | проект/роль. "
+                            "Примеры: «ПВС/менеджер», «ПВС/склад», «project:ПВС». "
+                            "all — ТОЛЬКО если сказали всем/всех без названия проекта"
                         ),
                     },
                     "due": {
@@ -151,13 +157,22 @@ async def parse_intent(
     people: list[dict[str, str]],
     is_owner: bool = False,
 ) -> dict[str, Any]:
-    names = ", ".join(f"{p['name']} ({p['role']})" for p in people) or "пока никого"
+    names = (
+        ", ".join(
+            f"{p['name']} (доступ:{p.get('role')}, роль:{p.get('job_title') or '—'}, "
+            f"проект:{p.get('team_group') or '—'})"
+            for p in people
+        )
+        or "пока никого"
+    )
     role = "владелец (видит всю команду)" if is_owner else "сотрудник (свои задачи + можно спросить по имени)"
     system = (
         "Ты ассистент task-CRM в Telegram. Пользователь пишет текстом или голосом.\n"
         f"Автор: {author_name} — {role}. Сотрудники: {names}.\n"
-        "Создать задачу → create_task (assignee=me|boss|all|имя).\n"
-        "«поставь задачу всем / на всех / команде» → assignee=all (одна задача на всю команду).\n"
+        "Создать задачу → create_task.\n"
+        "«поставь задачу всем» без проекта → assignee=all.\n"
+        "«менеджерам ПВС» / «поддержке ПВС» / «складу на ПВС» → assignee=«ПВС/менеджер» "
+        "(или другая роль), НЕ all. В title только суть задачи.\n"
         "Если сказал «сегодня»/«завтра» — due=today|tomorrow, иначе due=default.\n"
         "Если сказал «добавь комментарий …» — вынеси текст в comment, а из title убери эту часть.\n"
         "В title можно писать короткий артикул: «042 голд», «041 серый» — "

@@ -22,6 +22,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from app.audience import (
+    find_project_in_text,
+    find_role_in_text,
+    is_literal_all,
+    resolve_audience,
+    strip_audience_from_title,
+)
 from app.config import Settings
 from app.models import Employee, Task, TaskAssignee, TaskRun
 from app.notify import (
@@ -1201,14 +1208,28 @@ def build_dispatcher(
     def _resolve_assignees(
         people: list[Employee], token: str, author: Employee, *, raw_text: str = ""
     ) -> list[Employee] | None:
-        blob = f"{token} {raw_text}".lower()
-        if _is_all_token(token) or re.search(
-            r"(?i)(?<![а-яa-z])(всем|всех|на\s+всех|для\s+всех|всей\s+команде|команде)(?![а-яa-z])",
-            blob,
+        # 1) проект + роль: «менеджерам ПВС», «складу на ПВС»
+        audience = resolve_audience(people, token=token, raw_text=raw_text)
+        if audience is not None:
+            return audience  # пустой список = никого в этой группе
+
+        # 2) явное «всем» — только без проекта/роли
+        if is_literal_all(token, raw_text, people) or (
+            _is_all_token(token) and not find_role_in_text(f"{token} {raw_text}")
+            and not find_project_in_text(f"{token} {raw_text}", people)
         ):
             return list(people) if people else None
+
         one = _match_assignee(people, token, author)
         return [one] if one else None
+
+    def _audience_label(people: list[Employee], targets: list[Employee], raw: str) -> str:
+        proj = find_project_in_text(raw, people)
+        role = find_role_in_text(raw)
+        bits = [x for x in (role, proj) if x]
+        head = " · ".join(bits) if bits else "группе"
+        names = ", ".join(e.name for e in targets)
+        return f"{head} ({len(targets)}): {names}"
 
     async def _handle_natural(message: Message, text: str, state: FSMContext) -> None:
         if not message.from_user or not text.strip():
@@ -1237,14 +1258,26 @@ def build_dispatcher(
                 from app.nlp import parse_intent
 
                 is_owner = message.from_user.id == settings.owner_telegram_id
-                # быстрый путь без LLM: «поставь задачу всем …»
+                # быстрый путь: аудитория по проекту/роли без LLM
+                early_audience = resolve_audience(
+                    list(people), token="", raw_text=task_text
+                )
+                # быстрый путь без LLM: «поставь задачу всем …» (только явное всем)
                 m_all = re.search(
                     r"(?i)^\s*(?:поставь|назначь|создай)?\s*"
                     r"(?:задач[ауе]?\s+)?"
                     r"(?:всем|на\s+всех|для\s+всех|всей\s+команде)\s*[:\-]?\s*(.+)$",
                     task_text.strip(),
                 )
-                if m_all and m_all.group(1).strip():
+                if early_audience is not None:
+                    title_guess = strip_audience_from_title(task_text, list(people))
+                    intent = {
+                        "action": "create_task",
+                        "title": title_guess,
+                        "assignee": "audience",
+                        "due": "default",
+                    }
+                elif m_all and m_all.group(1).strip() and not find_role_in_text(task_text):
                     intent = {
                         "action": "create_task",
                         "title": m_all.group(1).strip(),
@@ -1256,7 +1289,15 @@ def build_dispatcher(
                         settings,
                         text=task_text,
                         author_name=author.name,
-                        people=[{"name": p.name, "role": p.role} for p in people],
+                        people=[
+                            {
+                                "name": p.name,
+                                "role": p.role,
+                                "job_title": p.job_title or "",
+                                "team_group": p.team_group or "",
+                            }
+                            for p in people
+                        ],
                         is_owner=is_owner,
                     )
                 action = intent.get("action")
@@ -1277,29 +1318,38 @@ def build_dispatcher(
                         )
                         title = (m.group(1) if m else task_text).strip()
                         title = re.sub(
-                            r"(?i)\b(всем|всех|на\s+всех|для\s+всех|команде)\b",
+                            r"(?i)\b(всем|всех|на\s+всех|для\s+всех|всей\s+команде)\b",
                             "",
                             title,
                         ).strip(" .,!—-")
                         title, title_comment2 = split_task_and_comment(title)
                         if title_comment2 and not comment_body:
                             comment_body = title_comment2
+                    title = strip_audience_from_title(title, list(people))
                     if not title:
                         await wait.edit_text("Не увидел текст задачи. Сформулируй ещё раз.")
                         return
-                    # «всем» часто теряется в tool — дублируем эвристикой по исходному тексту
-                    if re.search(
-                        r"(?i)(?<![а-яa-z])(всем|всех|на\s+всех|для\s+всех|всей\s+команде)(?![а-яa-z])",
-                        task_text,
-                    ):
+                    # «всем» — только явное; «менеджерам ПВС» сюда не попадает
+                    if is_literal_all(token, task_text, list(people)):
                         token = "all"
-                    targets = _resolve_assignees(
-                        list(people), token, author, raw_text=task_text
-                    )
+                    if early_audience is not None:
+                        targets = early_audience
+                    else:
+                        targets = _resolve_assignees(
+                            list(people), token, author, raw_text=task_text
+                        )
+                    if targets is not None and len(targets) == 0:
+                        proj = find_project_in_text(task_text, list(people)) or "?"
+                        role = find_role_in_text(task_text) or "?"
+                        await wait.edit_text(
+                            f"В проекте «{proj}» с ролью «{role}» никого нет.\n"
+                            "Проверь группы и роли в разделе «Проекты» на сайте."
+                        )
+                        return
                     if not targets:
                         await wait.edit_text(
                             f"Не понял, кому задача («{token}»). "
-                            "Назови имя, «себе», «боссу» или «всем»."
+                            "Назови имя, «себе», «боссу», «всем» или «менеджерам ПВС»."
                         )
                         return
                     due_hint = str(intent.get("due") or "default")
@@ -1322,6 +1372,8 @@ def build_dispatcher(
                     )
                     if len(targets) == 1:
                         who = targets[0].name
+                    elif resolve_audience(list(people), raw_text=task_text) is not None:
+                        who = _audience_label(list(people), targets, task_text)
                     else:
                         names = ", ".join(e.name for e in targets)
                         who = f"всем ({len(targets)}): {names}"
