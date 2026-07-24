@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-2" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-3" />
 </head>
 <body>
   <header class="top">
@@ -34,6 +34,7 @@
       <button type="button" data-view="home" class="active">Главная</button>
       <button type="button" data-view="board">Доска</button>
       <button type="button" data-view="templates">Шаблоны</button>
+      <button type="button" data-view="mindmap">Mind Map</button>
       <button type="button" data-view="archive">Архив</button>
     </nav>
     <div class="filters">
@@ -117,6 +118,35 @@
         <button type="button" id="btnNewTemplate">+ Шаблон</button>
       </div>
       <div id="tplList" class="tpl-list"></div>
+    </div>
+  </section>
+
+  <!-- MIND MAP -->
+  <section id="viewMindmap" class="view hidden">
+    <div id="mmListWrap" class="tpl-wrap">
+      <div class="tpl-head">
+        <div>
+          <h1>Mind Map</h1>
+          <p>Общие карты идей — любой сотрудник может зайти и дополнять.</p>
+        </div>
+        <button type="button" id="btnNewMindMap">+ Карта</button>
+      </div>
+      <div id="mmList" class="tpl-list"></div>
+    </div>
+    <div id="mmEditorWrap" class="mm-editor-wrap hidden">
+      <div class="mm-toolbar">
+        <button type="button" id="btnMmBack" class="ghost">← К картам</button>
+        <input id="mmTitleInput" type="text" maxlength="300" placeholder="Название карты" />
+        <div class="mm-toolbar-actions">
+          <button type="button" id="btnMmAddRootChild" title="Добавить идею от корня">+ Идея</button>
+          <button type="button" id="btnMmDelete" class="ghost danger" title="Удалить карту">Удалить</button>
+        </div>
+      </div>
+      <p class="mm-hint">Двойной клик — текст · перетащи узел · «+» у узла — ветка · колёсико — масштаб</p>
+      <div id="mmCanvas" class="mm-canvas">
+        <svg id="mmLinks" class="mm-links"></svg>
+        <div id="mmNodes" class="mm-nodes"></div>
+      </div>
     </div>
   </section>
 
@@ -302,6 +332,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-2"></script>
+  <script src="/static/app.js?v=pw-3"></script>
 </body>
 </html>

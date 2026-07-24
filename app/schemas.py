@@ -205,3 +205,60 @@ class TemplateOut(BaseModel):
     last_spawned_on: date | None = None
 
     model_config = {"from_attributes": True}
+
+
+class MindMapIn(BaseModel):
+    title: str
+    description: str = ""
+    created_by_id: int | None = None
+
+
+class MindMapPatch(BaseModel):
+    title: str | None = None
+    description: str | None = None
+
+
+class MindMapNodeIn(BaseModel):
+    text: str = "Идея"
+    parent_id: int | None = None
+    x: int | None = None
+    y: int | None = None
+    color: str | None = None
+    created_by_id: int | None = None
+
+
+class MindMapNodePatch(BaseModel):
+    text: str | None = None
+    parent_id: int | None = None
+    x: int | None = None
+    y: int | None = None
+    color: str | None = None
+
+
+class MindMapNodeOut(BaseModel):
+    id: int
+    map_id: int
+    parent_id: int | None
+    text: str
+    x: int
+    y: int
+    color: str
+    created_by_id: int | None = None
+    created_by_name: str | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class MindMapOut(BaseModel):
+    id: int
+    title: str
+    description: str = ""
+    created_by_id: int | None = None
+    created_by_name: str | None = None
+    node_count: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    nodes: list[MindMapNodeOut] = Field(default_factory=list)
+
+    model_config = {"from_attributes": True}

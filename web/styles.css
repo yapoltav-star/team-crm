@@ -1249,9 +1249,163 @@ body.dlg-open {
 }
 #tplDlg menu .danger { margin-right: auto; }
 
+/* —— Mind Map —— */
+.mm-card { cursor: pointer; }
+.mm-card:hover { border-color: var(--accent); }
+
+.mm-editor-wrap {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 58px);
+  min-height: 420px;
+}
+
+.mm-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.mm-toolbar input {
+  flex: 1;
+  min-width: 160px;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.mm-toolbar-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.mm-hint {
+  margin: 0;
+  padding: 0.45rem 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-soft);
+}
+
+.mm-canvas {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 1px 1px, var(--line) 1px, transparent 0) 0 0 / 22px 22px,
+    var(--bg);
+  cursor: grab;
+  touch-action: none;
+}
+
+.mm-canvas.panning { cursor: grabbing; }
+
+.mm-links,
+.mm-nodes {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.mm-links {
+  overflow: visible;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.mm-nodes {
+  z-index: 2;
+  width: 4000px;
+  height: 3000px;
+}
+
+.mm-node {
+  position: absolute;
+  width: 180px;
+  min-height: 52px;
+  padding: 0.55rem 0.65rem 0.45rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--mm-color, var(--accent)) 55%, var(--line));
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  border-left: 4px solid var(--mm-color, var(--accent));
+  cursor: grab;
+  user-select: none;
+}
+
+.mm-node.is-root {
+  width: 200px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--mm-color, var(--accent)) 10%, var(--panel));
+}
+
+.mm-node.dragging {
+  opacity: 0.92;
+  cursor: grabbing;
+  z-index: 5;
+}
+
+.mm-node-text {
+  font-size: 0.9rem;
+  line-height: 1.35;
+  color: var(--text);
+  word-break: break-word;
+  padding-right: 1.6rem;
+}
+
+.mm-node-actions {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  display: flex;
+  gap: 0.15rem;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.mm-node:hover .mm-node-actions { opacity: 1; }
+
+.mm-node-actions button {
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  border-radius: 5px;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.mm-node-actions .mm-add {
+  color: var(--accent);
+}
+
+.mm-node-actions .mm-del:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.mm-node-author {
+  margin-top: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
 @media (max-width: 900px) {
   .top { flex-wrap: wrap; }
   .drawer-grid { grid-template-columns: 1fr; }
   .drawer-side { border-left: none; border-top: 1px solid var(--line); }
   .nav-tabs { order: 3; width: 100%; }
+  .mm-toolbar { align-items: stretch; }
 }

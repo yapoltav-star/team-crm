@@ -210,3 +210,46 @@ class Article(Base):
     sales_90d: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MindMap(Base):
+    """Общая карта идей — доступна всей команде."""
+
+    __tablename__ = "mind_maps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(300))
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    created_by: Mapped[Employee | None] = relationship(foreign_keys=[created_by_id])
+    nodes: Mapped[list[MindMapNode]] = relationship(
+        back_populates="mind_map",
+        cascade="all, delete-orphan",
+    )
+
+
+class MindMapNode(Base):
+    __tablename__ = "mind_map_nodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    map_id: Mapped[int] = mapped_column(ForeignKey("mind_maps.id"), index=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mind_map_nodes.id"), nullable=True, index=True
+    )
+    text: Mapped[str] = mapped_column(String(500), default="")
+    x: Mapped[int] = mapped_column(Integer, default=0)
+    y: Mapped[int] = mapped_column(Integer, default=0)
+    color: Mapped[str] = mapped_column(String(20), default="#2383e2")
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    mind_map: Mapped[MindMap] = relationship(back_populates="nodes")
+    parent: Mapped[MindMapNode | None] = relationship(
+        remote_side="MindMapNode.id",
+        foreign_keys=[parent_id],
+    )
+    created_by: Mapped[Employee | None] = relationship(foreign_keys=[created_by_id])

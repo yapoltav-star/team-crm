@@ -15,6 +15,8 @@ from app.job_titles import JOB_TITLE_SET
 from app.models import (
     Employee,
     EmployeeAccess,
+    MindMap,
+    MindMapNode,
     Project,
     Task,
     TaskAssignee,
@@ -32,6 +34,12 @@ from app.schemas import (
     EmployeePatch,
     EventOut,
     HomeOut,
+    MindMapIn,
+    MindMapNodeIn,
+    MindMapNodeOut,
+    MindMapNodePatch,
+    MindMapOut,
+    MindMapPatch,
     ProjectIn,
     ProjectOut,
     TaskIn,
@@ -821,6 +829,238 @@ async def delete_template(
     await session.delete(t)
     await session.commit()
     return {"ok": True}
+
+
+def _mind_node_out(n: MindMapNode) -> MindMapNodeOut:
+    return MindMapNodeOut(
+        id=n.id,
+        map_id=n.map_id,
+        parent_id=n.parent_id,
+        text=n.text or "",
+        x=n.x or 0,
+        y=n.y or 0,
+        color=n.color or "#2383e2",
+        created_by_id=n.created_by_id,
+        created_by_name=n.created_by.name if n.created_by else None,
+        created_at=n.created_at,
+    )
+
+
+def _mind_map_out(m: MindMap, *, with_nodes: bool = False) -> MindMapOut:
+    nodes = list(m.nodes or [])
+    return MindMapOut(
+        id=m.id,
+        title=m.title,
+        description=m.description or "",
+        created_by_id=m.created_by_id,
+        created_by_name=m.created_by.name if m.created_by else None,
+        node_count=len(nodes),
+        created_at=m.created_at,
+        updated_at=m.updated_at,
+        nodes=[_mind_node_out(n) for n in nodes] if with_nodes else [],
+    )
+
+
+async def _load_mind_map(session: AsyncSession, map_id: int) -> MindMap | None:
+    return await session.scalar(
+        select(MindMap)
+        .where(MindMap.id == map_id, MindMap.active.is_(True))
+        .options(
+            selectinload(MindMap.created_by),
+            selectinload(MindMap.nodes).selectinload(MindMapNode.created_by),
+        )
+    )
+
+
+@router.get("/mindmaps", response_model=list[MindMapOut])
+async def list_mindmaps(session: AsyncSession = Depends(get_session)) -> list[MindMapOut]:
+    rows = (
+        await session.scalars(
+            select(MindMap)
+            .where(MindMap.active.is_(True))
+            .options(
+                selectinload(MindMap.created_by),
+                selectinload(MindMap.nodes),
+            )
+            .order_by(MindMap.updated_at.desc(), MindMap.id.desc())
+        )
+    ).all()
+    return [_mind_map_out(m) for m in rows]
+
+
+@router.post("/mindmaps", response_model=MindMapOut)
+async def create_mindmap(
+    body: MindMapIn, session: AsyncSession = Depends(get_session)
+) -> MindMapOut:
+    title = (body.title or "").strip() or "Новая карта"
+    m = MindMap(
+        title=title,
+        description=(body.description or "").strip(),
+        created_by_id=body.created_by_id,
+        updated_at=datetime.utcnow(),
+    )
+    session.add(m)
+    await session.flush()
+    root = MindMapNode(
+        map_id=m.id,
+        parent_id=None,
+        text=title,
+        x=420,
+        y=280,
+        color="#2383e2",
+        created_by_id=body.created_by_id,
+    )
+    session.add(root)
+    await session.commit()
+    m = await _load_mind_map(session, m.id)
+    assert m is not None
+    return _mind_map_out(m, with_nodes=True)
+
+
+@router.get("/mindmaps/{map_id}", response_model=MindMapOut)
+async def get_mindmap(
+    map_id: int, session: AsyncSession = Depends(get_session)
+) -> MindMapOut:
+    m = await _load_mind_map(session, map_id)
+    if not m:
+        raise HTTPException(404, "Mind map not found")
+    return _mind_map_out(m, with_nodes=True)
+
+
+@router.patch("/mindmaps/{map_id}", response_model=MindMapOut)
+async def patch_mindmap(
+    map_id: int, body: MindMapPatch, session: AsyncSession = Depends(get_session)
+) -> MindMapOut:
+    m = await _load_mind_map(session, map_id)
+    if not m:
+        raise HTTPException(404, "Mind map not found")
+    data = body.model_dump(exclude_unset=True)
+    if "title" in data and data["title"] is not None:
+        m.title = str(data["title"]).strip() or m.title
+    if "description" in data and data["description"] is not None:
+        m.description = str(data["description"]).strip()
+    m.updated_at = datetime.utcnow()
+    await session.commit()
+    m = await _load_mind_map(session, map_id)
+    assert m is not None
+    return _mind_map_out(m, with_nodes=True)
+
+
+@router.delete("/mindmaps/{map_id}")
+async def delete_mindmap(
+    map_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    m = await session.get(MindMap, map_id)
+    if not m or not m.active:
+        raise HTTPException(404, "Mind map not found")
+    m.active = False
+    m.updated_at = datetime.utcnow()
+    await session.commit()
+    return {"ok": True}
+
+
+@router.post("/mindmaps/{map_id}/nodes", response_model=MindMapNodeOut)
+async def create_mind_node(
+    map_id: int, body: MindMapNodeIn, session: AsyncSession = Depends(get_session)
+) -> MindMapNodeOut:
+    m = await _load_mind_map(session, map_id)
+    if not m:
+        raise HTTPException(404, "Mind map not found")
+    parent = None
+    if body.parent_id is not None:
+        parent = next((n for n in m.nodes if n.id == body.parent_id), None)
+        if not parent:
+            raise HTTPException(400, "Parent node not found")
+    siblings = [n for n in m.nodes if n.parent_id == body.parent_id]
+    if body.x is not None and body.y is not None:
+        x, y = body.x, body.y
+    elif parent:
+        x = parent.x + 220
+        y = parent.y + (len(siblings) - (len(siblings) // 2)) * 90
+    else:
+        x, y = 420, 280
+    node = MindMapNode(
+        map_id=map_id,
+        parent_id=body.parent_id,
+        text=(body.text or "Идея").strip() or "Идея",
+        x=x,
+        y=y,
+        color=(body.color or (parent.color if parent else "#2383e2"))[:20],
+        created_by_id=body.created_by_id,
+    )
+    session.add(node)
+    m.updated_at = datetime.utcnow()
+    await session.commit()
+    node = await session.scalar(
+        select(MindMapNode)
+        .where(MindMapNode.id == node.id)
+        .options(selectinload(MindMapNode.created_by))
+    )
+    assert node is not None
+    return _mind_node_out(node)
+
+
+@router.patch("/mindmaps/{map_id}/nodes/{node_id}", response_model=MindMapNodeOut)
+async def patch_mind_node(
+    map_id: int,
+    node_id: int,
+    body: MindMapNodePatch,
+    session: AsyncSession = Depends(get_session),
+) -> MindMapNodeOut:
+    m = await _load_mind_map(session, map_id)
+    if not m:
+        raise HTTPException(404, "Mind map not found")
+    node = next((n for n in m.nodes if n.id == node_id), None)
+    if not node:
+        raise HTTPException(404, "Node not found")
+    data = body.model_dump(exclude_unset=True)
+    if "text" in data and data["text"] is not None:
+        node.text = str(data["text"]).strip()[:500] or node.text
+    if "x" in data and data["x"] is not None:
+        node.x = int(data["x"])
+    if "y" in data and data["y"] is not None:
+        node.y = int(data["y"])
+    if "color" in data and data["color"] is not None:
+        node.color = str(data["color"])[:20]
+    if "parent_id" in data:
+        pid = data["parent_id"]
+        if pid is not None:
+            if pid == node.id:
+                raise HTTPException(400, "Node cannot be its own parent")
+            if not any(n.id == pid for n in m.nodes):
+                raise HTTPException(400, "Parent node not found")
+        node.parent_id = pid
+    m.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(node)
+    return _mind_node_out(node)
+
+
+@router.delete("/mindmaps/{map_id}/nodes/{node_id}")
+async def delete_mind_node(
+    map_id: int, node_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    m = await _load_mind_map(session, map_id)
+    if not m:
+        raise HTTPException(404, "Mind map not found")
+    node = next((n for n in m.nodes if n.id == node_id), None)
+    if not node:
+        raise HTTPException(404, "Node not found")
+    if node.parent_id is None:
+        raise HTTPException(400, "Корневую идею удалить нельзя")
+
+    def collect(nid: int) -> list[int]:
+        kids = [n.id for n in m.nodes if n.parent_id == nid]
+        out = [nid]
+        for kid in kids:
+            out.extend(collect(kid))
+        return out
+
+    ids = collect(node_id)
+    await session.execute(delete(MindMapNode).where(MindMapNode.id.in_(ids)))
+    m.updated_at = datetime.utcnow()
+    await session.commit()
+    return {"ok": True, "deleted": len(ids)}
 
 
 @router.post("/stock-watch/run")
