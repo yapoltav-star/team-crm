@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -38,7 +39,9 @@ class OwnCritical:
 
 
 def _marker(family_key: str) -> str:
-    return f"{MARKER_PREFIX}{family_key}]"
+    """Короткий маркер для кулдауна — без длинного списка артикулов в тексте задачи."""
+    digest = hashlib.sha1(family_key.encode("utf-8")).hexdigest()[:12]
+    return f"{MARKER_PREFIX}{digest}]"
 
 
 def _sales_by_vendor(supply_report: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -225,25 +228,9 @@ async def run_stock_watch(
                 skipped_cooldown += 1
                 continue
 
-            fam = ", ".join(sku.family[:6])
-            if len(sku.family) > 6:
-                fam += f" (+{len(sku.family) - 6})"
-            title = (
-                f"Наш склад: {sku.family_stock} шт — {sku.vendor_code} "
-                f"(заказы {sku.ordered})"
-            )
-            desc = (
-                f"{marker}\n"
-                f"Автозадача: остаток на НАШЕМ складе.\n"
-                f"Артикул: {sku.vendor_code}\n"
-                f"Название: {sku.name or '—'}\n"
-                f"Остаток артикула: {sku.stock} шт\n"
-                f"Остаток семьи (общий): {sku.family_stock} шт\n"
-                f"Семья: {fam}\n"
-                f"Заказы за период: {sku.ordered}, выкупы: {sku.buyouts}\n"
-                f"Срез склада: {own.get('as_of') or '—'}\n"
-                f"Источник: {base}/ (раздел «Наш склад»)"
-            )
+            title = f'Закупить {sku.vendor_code}, на вашем складе кончился'
+            # маркер только для кулдауна, в UI описание не показываем
+            desc = _marker(sku.family_key)
             task = Task(
                 title=title[:500],
                 description=desc,

@@ -478,6 +478,14 @@ function renderManagerBar() {
   hint.classList.toggle("hidden", tasks.length > 0);
 }
 
+function cardDisplayDescription(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  // автозадачи по складу — на карточке без техтекста
+  if (/\[auto:own-stock:/i.test(s) || /Автозадача:\s*остаток/i.test(s)) return "";
+  return s;
+}
+
 function cardHtml(t) {
   const skus = parseArticles(t.articles);
   const skuHtml = skus.length
@@ -490,6 +498,7 @@ function cardHtml(t) {
     : t.assignee_name
       ? [{ id: t.assignee_id, name: t.assignee_name }]
       : [];
+  const desc = cardDisplayDescription(t.description);
   return `
     ${dueDot(t.due_flag)}
     <div class="card-actions">
@@ -498,7 +507,7 @@ function cardHtml(t) {
     </div>
     ${skuHtml}
     <h3>${escapeHtml(t.title)}</h3>
-    ${t.description ? `<div class="desc">${escapeHtml(t.description)}</div>` : ""}
+    ${desc ? `<div class="desc">${escapeHtml(desc)}</div>` : ""}
     <div class="meta">
       ${avatarsHtml(assignees)}
       ${t.due_date ? `<span class="chip">до ${formatDate(t.due_date)}</span>` : ""}
@@ -840,7 +849,9 @@ async function openTaskDialog(taskId) {
   form.elements.id.value = task.id;
   form.elements.title.value = task.title || "";
   form.elements.articles.value = task.articles || "";
-  form.elements.description.value = task.description || "";
+  form.elements.description.value = cardDisplayDescription(task.description);
+  form.dataset.autoMarker =
+    (/\[auto:own-stock:[^\]]+\]/i.exec(String(task.description || "")) || [])[0] || "";
   form.elements.status.value = task.status || "todo";
   form.elements.due_date.value = task.due_date || "";
   const project = form.elements.project_id;
@@ -1240,7 +1251,12 @@ $("#dlgForm").addEventListener("submit", async (e) => {
   const assignee_ids = readAssigneeChecks("#assigneeChecks");
   const body = {
     title: String(form.elements.title.value || "").trim(),
-    description: String(form.elements.description.value || ""),
+    description: (() => {
+      const typed = String(form.elements.description.value || "").trim();
+      const marker = form.dataset.autoMarker || "";
+      if (typed) return typed;
+      return marker;
+    })(),
     articles: String(form.elements.articles.value || "").trim(),
     status: form.elements.status.value,
     due_date: form.elements.due_date.value || null,
