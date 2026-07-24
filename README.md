@@ -45,13 +45,19 @@ uvicorn app.main:app --reload --port 8000
 Пока смотрим только раздел **«Наш склад»** (не склады WB).
 
 Правило: остаток семьи на нашем складе ≤ `STOCK_OWN_MAX_STOCK` **и** по артикулу
-есть продажи (заказы/выкупы) → задача в CRM + Telegram.
+есть продажи → задача в CRM + Telegram.
+
+Расписание: **Пн / Ср / Пт** в `STOCK_WATCH_TIME` (по умолчанию 09:00 МСК).
+Повтор по той же семье артикулов — не раньше чем через `STOCK_COOLDOWN_DAYS` (7).
 
 Variables:
 - `WB_DASHBOARD_URL`
 - `STOCK_WATCH_ENABLED=true`
-- `STOCK_OWN_MAX_STOCK=0` — алерт при пустом складе (поставь `2`, если нужно «мало»)
-- `STOCK_MIN_ORDERS=5` / `STOCK_REQUIRE_BUYOUTS=true` — фильтр «есть продажи»
+- `STOCK_WATCH_DAYS=mon,wed,fri`
+- `STOCK_WATCH_TIME=09:00`
+- `STOCK_COOLDOWN_DAYS=7`
+- `STOCK_OWN_MAX_STOCK=0`
+- `STOCK_MIN_ORDERS=5` / `STOCK_REQUIRE_BUYOUTS=true`
 - `STOCK_MAX_TASKS=10`
 - `STOCK_ASSIGNEE_TELEGRAM_ID` — кому (0 = владелец)
 

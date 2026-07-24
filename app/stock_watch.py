@@ -130,21 +130,28 @@ async def fetch_json(url: str) -> dict[str, Any]:
             return data
 
 
-async def _open_markers(session: AsyncSession) -> set[str]:
+async def _blocked_markers(session: AsyncSession, *, cooldown_days: int) -> set[str]:
+    """Не создавать снова: открытые задачи или любые с маркером за cooldown_days."""
+    cutoff = datetime.utcnow() - timedelta(days=max(1, cooldown_days))
     tasks = (
-        await session.scalars(
-            select(Task).where(Task.active.is_(True), Task.status != "done")
-        )
+        await session.scalars(select(Task).where(Task.active.is_(True)))
     ).all()
     out: set[str] = set()
     for t in tasks:
-        blob = f"{t.description or ''}\n{t.articles or ''}"
+        blob = f"{t.description or ''}\n{t.articles or ''}\n{t.title or ''}"
         if MARKER_PREFIX not in blob:
             continue
         start = blob.find(MARKER_PREFIX)
         end = blob.find("]", start)
-        if end > start:
-            out.add(blob[start : end + 1])
+        if end <= start:
+            continue
+        marker = blob[start : end + 1]
+        if t.status != "done":
+            out.add(marker)
+            continue
+        created = t.created_at or datetime.utcnow()
+        if created >= cutoff:
+            out.add(marker)
     return out
 
 
@@ -206,13 +213,16 @@ async def run_stock_watch(
             if emp:
                 assignee = emp
 
-        existing = await _open_markers(session)
+        existing = await _blocked_markers(
+            session, cooldown_days=settings.stock_cooldown_days
+        )
         today = datetime.now(settings.tz).date()
+        skipped_cooldown = 0
 
         for sku in top:
             marker = _marker(sku.family_key)
             if marker in existing:
-                skipped_existing += 1
+                skipped_cooldown += 1
                 continue
 
             fam = ", ".join(sku.family[:6])
@@ -291,21 +301,18 @@ async def run_stock_watch(
             )
             existing.add(marker)
 
-        if critical and bot:
+        if created and bot:
             lines = [
-                f"🏭 <b>Наш склад</b>: критично <b>{len(critical)}</b> "
-                f"(остаток семьи ≤{settings.stock_own_max_stock}, "
-                f"заказы ≥{settings.stock_min_orders}"
-                f"{', есть выкупы' if settings.stock_require_buyouts else ''})",
+                f"🏭 <b>Наш склад</b>: новые задачи <b>{len(created)}</b> "
+                f"(критично всего {len(critical)}, пропущено по кулдауну {skipped_cooldown})",
                 f"Срез: {own.get('as_of') or '—'}",
-                f"Создано задач: <b>{len(created)}</b>, уже были: {skipped_existing}",
                 "",
-                "Топ:",
+                "Создано:",
             ]
-            for sku in critical[:8]:
+            for row in created[:10]:
                 lines.append(
-                    f"• <code>{sku.vendor_code}</code> — "
-                    f"склад {sku.family_stock} шт, заказы {sku.ordered}"
+                    f"• <code>{row['vendor_code']}</code> — "
+                    f"склад {row['family_stock']} шт, заказы {row['ordered']}"
                 )
             try:
                 await bot.send_message(
@@ -322,5 +329,6 @@ async def run_stock_watch(
         "as_of": own.get("as_of"),
         "critical_total": len(critical),
         "created": created,
-        "skipped_existing": skipped_existing,
+        "skipped_existing": skipped_cooldown,
+        "cooldown_days": settings.stock_cooldown_days,
     }

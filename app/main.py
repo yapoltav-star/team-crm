@@ -69,6 +69,8 @@ async def lifespan(app: FastAPI):
     app.state.last_stock_watch = None
 
     if settings.stock_watch_enabled and settings.wb_dashboard_url:
+        from apscheduler.triggers.cron import CronTrigger
+
         from app.stock_watch import run_stock_watch
 
         async def stock_tick() -> None:
@@ -80,35 +82,38 @@ async def lifespan(app: FastAPI):
             app.state.last_stock_watch = result
             logger.info("stock_watch: %s", result)
 
+        raw_time = (settings.stock_watch_time or "09:00").strip()
+        try:
+            hh, mm = [int(x) for x in raw_time.split(":")[:2]]
+        except Exception:  # noqa: BLE001
+            hh, mm = 9, 0
+        days = (settings.stock_watch_days or "mon,wed,fri").strip() or "mon,wed,fri"
         scheduler.add_job(
             stock_tick,
-            "interval",
-            minutes=max(30, int(settings.stock_watch_interval_minutes or 180)),
+            CronTrigger(
+                day_of_week=days,
+                hour=hh,
+                minute=mm,
+                timezone=settings.tz_name,
+            ),
             id="stock_watch",
             replace_existing=True,
             max_instances=1,
         )
         logger.info(
-            "Stock watch enabled → %s every %sm",
+            "Stock watch enabled → %s on %s at %02d:%02d (%s), cooldown %sd",
             settings.wb_dashboard_url,
-            settings.stock_watch_interval_minutes,
+            days,
+            hh,
+            mm,
+            settings.tz_name,
+            settings.stock_cooldown_days,
         )
 
     scheduler.start()
     if settings.bot_enabled and bot is not None:
         await materialize_and_notify(SessionLocal, bot, settings)
-    if settings.stock_watch_enabled and settings.wb_dashboard_url:
-        from app.stock_watch import run_stock_watch
-
-        try:
-            result = await run_stock_watch(
-                session_factory=SessionLocal, settings=settings, bot=bot
-            )
-            app.state.last_stock_watch = result
-            logger.info("stock_watch first run: %s", result)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("stock_watch first run failed")
-            app.state.last_stock_watch = {"ok": False, "error": str(exc)}
+    # плановый прогон только по расписанию Пн/Ср/Пт — не при каждом деплое
 
     yield
 
@@ -162,11 +167,12 @@ async def health(request: Request) -> dict:
         }
     return {
         "ok": True,
-        "build": "fix-set-assignees-2026-07-24",
+        "build": "stock-mwf-cooldown-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "stock_watch": settings.stock_watch_enabled,
-        "stock_interval_min": settings.stock_watch_interval_minutes,
+        "stock_schedule": f"{settings.stock_watch_days} @ {settings.stock_watch_time}",
+        "stock_cooldown_days": settings.stock_cooldown_days,
         "stock_last": last_summary,
     }
 

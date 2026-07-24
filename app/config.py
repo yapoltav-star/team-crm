@@ -29,7 +29,11 @@ class Settings(BaseSettings):
         alias="WB_DASHBOARD_URL",
     )
     stock_watch_enabled: bool = Field(default=True, alias="STOCK_WATCH_ENABLED")
-    stock_watch_interval_minutes: int = Field(default=60, alias="STOCK_WATCH_INTERVAL_MINUTES")
+    # пн,ср,пт — дни проверки (cron day_of_week)
+    stock_watch_days: str = Field(default="mon,wed,fri", alias="STOCK_WATCH_DAYS")
+    stock_watch_time: str = Field(default="09:00", alias="STOCK_WATCH_TIME")
+    # не создавать повторно по тому же артикулу/семье N дней (даже если старую закрыли)
+    stock_cooldown_days: int = Field(default=7, alias="STOCK_COOLDOWN_DAYS")
     # алерт если остаток семьи на нашем складе ≤ этого числа (0 = пусто)
     stock_own_max_stock: int = Field(default=0, alias="STOCK_OWN_MAX_STOCK")
     # минимум заказов за период — без продаж задачи не создаём
@@ -47,6 +51,8 @@ class Settings(BaseSettings):
         "openai_api_key",
         "openai_base_url",
         "wb_dashboard_url",
+        "stock_watch_days",
+        "stock_watch_time",
         mode="before",
     )
     @classmethod
