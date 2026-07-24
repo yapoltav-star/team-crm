@@ -28,6 +28,7 @@ async def init_db() -> None:
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'normal'",
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP",
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INTEGER",
             "ALTER TABLE employees ALTER COLUMN telegram_id TYPE BIGINT",
         ):

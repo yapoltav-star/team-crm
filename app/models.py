@@ -74,6 +74,7 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     template_id: Mapped[int | None] = mapped_column(ForeignKey("task_templates.id"), nullable=True)
 
     project: Mapped[Project | None] = relationship(back_populates="tasks")

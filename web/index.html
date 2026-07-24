@@ -26,6 +26,7 @@
       <button type="button" data-view="home" class="active">Главная</button>
       <button type="button" data-view="board">Доска</button>
       <button type="button" data-view="templates">Шаблоны</button>
+      <button type="button" data-view="archive">Архив</button>
     </nav>
     <div class="filters">
       <select id="projectFilter"><option value="">Все проекты</option></select>
@@ -101,6 +102,20 @@
         <button type="button" id="btnNewTemplate">+ Шаблон</button>
       </div>
       <div id="tplList" class="tpl-list"></div>
+    </div>
+  </section>
+
+  <!-- ARCHIVE -->
+  <section id="viewArchive" class="view hidden">
+    <div class="tpl-wrap">
+      <div class="tpl-head">
+        <div>
+          <h1>Архив</h1>
+          <p>Выполненные задачи через 7 дней попадают сюда — по месяцам.</p>
+        </div>
+        <select id="archiveMonth"></select>
+      </div>
+      <div id="archiveList" class="tpl-list"></div>
     </div>
   </section>
 

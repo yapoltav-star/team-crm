@@ -150,7 +150,7 @@ async def board(session: AsyncSession = Depends(get_session)) -> BoardOut:
     tasks = (
         await session.scalars(
             select(Task)
-            .where(Task.active.is_(True))
+            .where(Task.active.is_(True), Task.archived_at.is_(None))
             .options(*_task_options())
             .order_by(Task.position, Task.id)
         )
@@ -173,7 +173,11 @@ async def home(
     tasks = (
         await session.scalars(
             select(Task)
-            .where(Task.active.is_(True), Task.status != "done")
+            .where(
+                Task.active.is_(True),
+                Task.archived_at.is_(None),
+                Task.status != "done",
+            )
             .options(*_task_options())
             .order_by(Task.due_date.nulls_last(), Task.id)
         )
@@ -462,14 +466,52 @@ async def add_comment(
 
 
 @router.delete("/tasks/{task_id}")
-async def delete_task(task_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+async def delete_task(
+    task_id: int,
+    actor_id: int | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Мягкое удаление — доступно любому залогиненному (менеджеры тоже)."""
     task = await session.get(Task, task_id)
-    if not task:
+    if not task or not task.active:
         raise HTTPException(404, "Task not found")
     task.active = False
-    await add_event(session, task_id, "Задача удалена", kind="deleted")
+    who = "кто-то"
+    if actor_id:
+        emp = await session.get(Employee, actor_id)
+        if emp:
+            who = emp.name
+    await add_event(session, task_id, f"Удалена — {who}", kind="deleted", actor_id=actor_id)
     await session.commit()
     return {"ok": True}
+
+
+@router.get("/archive/months")
+async def archive_months(session: AsyncSession = Depends(get_session)) -> list[dict]:
+    from app.archive import list_archive_months
+
+    return await list_archive_months(session)
+
+
+@router.get("/archive")
+async def archive_list(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    session: AsyncSession = Depends(get_session),
+) -> list[TaskOut]:
+    from app.archive import list_archive_tasks
+
+    settings = get_settings()
+    today = datetime.now(settings.tz).date()
+    tasks = await list_archive_tasks(session, year=year, month=month)
+    return [_task_out(t, today=today) for t in tasks]
+
+
+@router.post("/archive/run")
+async def archive_run() -> dict:
+    from app.archive import archive_old_done_tasks
+
+    return await archive_old_done_tasks(SessionLocal)
 
 
 def _template_out(t: TaskTemplate) -> TemplateOut:

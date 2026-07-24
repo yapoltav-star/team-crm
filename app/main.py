@@ -124,7 +124,27 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     if settings.bot_enabled and bot is not None:
         await materialize_and_notify(SessionLocal, bot, settings)
-    # плановый прогон только по расписанию Пн/Ср/Пт — не при каждом деплое
+
+    from app.archive import archive_old_done_tasks
+
+    async def archive_tick() -> None:
+        result = await archive_old_done_tasks(SessionLocal)
+        logger.info("archive_tick: %s", result)
+
+    scheduler.add_job(
+        archive_tick,
+        "cron",
+        hour=3,
+        minute=15,
+        timezone=settings.tz_name,
+        id="archive_done",
+        replace_existing=True,
+        max_instances=1,
+    )
+    try:
+        await archive_old_done_tasks(SessionLocal)
+    except Exception:  # noqa: BLE001
+        logger.exception("archive first run failed")
 
     yield
 
@@ -211,7 +231,7 @@ async def health() -> dict:
     settings = get_settings()
     return {
         "ok": True,
-        "build": "security-gate-2026-07-24",
+        "build": "archive-scroll-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "auth": bool(str(settings.web_password or "").strip()),

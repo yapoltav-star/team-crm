@@ -153,10 +153,11 @@ function setView(view) {
   $("#viewHome").classList.toggle("hidden", view !== "home");
   $("#viewBoard").classList.toggle("hidden", view !== "board");
   $("#viewTemplates").classList.toggle("hidden", view !== "templates");
+  $("#viewArchive").classList.toggle("hidden", view !== "archive");
   document.querySelectorAll("#navTabs button").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === view);
   });
-  $("#projectFilter").classList.toggle("hidden", view === "templates");
+  $("#projectFilter").classList.toggle("hidden", view === "templates" || view === "archive");
 }
 
 function fillSelects() {
@@ -411,6 +412,66 @@ function render() {
   if (state.view === "home") renderHome();
   if (state.view === "board") renderBoardView();
   if (state.view === "templates") renderTemplates();
+  if (state.view === "archive") renderArchive();
+}
+
+const MONTH_RU = [
+  "",
+  "Январь",
+  "Февраль",
+  "Март",
+  "Апрель",
+  "Май",
+  "Июнь",
+  "Июль",
+  "Август",
+  "Сентябрь",
+  "Октябрь",
+  "Ноябрь",
+  "Декабрь",
+];
+
+async function renderArchive() {
+  const sel = $("#archiveMonth");
+  const list = $("#archiveList");
+  const months = await api("/api/archive/months");
+  if (!months.length) {
+    sel.innerHTML = "";
+    list.innerHTML = `<div class="home-empty">Архив пока пуст. Выполненные задачи попадут сюда через 7 дней.</div>`;
+    return;
+  }
+  const cur = sel.value;
+  sel.innerHTML = months
+    .map(
+      (m) =>
+        `<option value="${m.year}-${m.month}">${MONTH_RU[m.month] || m.month} ${m.year} (${m.count})</option>`
+    )
+    .join("");
+  if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  const [y, mo] = sel.value.split("-").map(Number);
+  const tasks = await api(`/api/archive?year=${y}&month=${mo}`);
+  if (!tasks.length) {
+    list.innerHTML = `<div class="home-empty">В этом месяце пусто.</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  for (const t of tasks) {
+    const el = document.createElement("article");
+    el.className = "tpl-card";
+    el.innerHTML = `
+      <div class="tpl-card-top">
+        <h3>${escapeHtml(t.title)}</h3>
+        <span class="chip ok">выполнено</span>
+      </div>
+      <div class="meta">
+        ${t.completed_at ? `<span class="chip">${formatDt(t.completed_at)}</span>` : ""}
+        ${t.completed_by_name ? `<span class="chip">${escapeHtml(t.completed_by_name)}</span>` : ""}
+        ${t.articles ? `<span class="chip project">${escapeHtml(t.articles)}</span>` : ""}
+      </div>
+    `;
+    el.addEventListener("click", () => openTaskDialog(t.id));
+    list.appendChild(el);
+  }
 }
 
 function resolveAssigneeId(mode) {
@@ -536,13 +597,18 @@ async function openTaskDialog(taskId) {
   renderEvents(task);
   $("#commentBody").value = "";
   $("#commentFile").value = "";
+  document.body.classList.add("dlg-open");
   dlg.showModal();
+  const grid = dlg.querySelector(".drawer-grid");
+  if (grid) grid.scrollTop = 0;
 }
 
 async function deleteTask(task) {
-  if (!confirm(`Удалить задачу «${task.title}»?`)) return;
-  await api(`/api/tasks/${task.id}`, { method: "DELETE" });
+  if (!confirm(`Удалить задачу «${task.title}»?\nУдалить может любой из команды.`)) return;
+  const q = state.meId ? `?actor_id=${state.meId}` : "";
+  await api(`/api/tasks/${task.id}${q}`, { method: "DELETE" });
   $("#taskDlg").close();
+  document.body.classList.remove("dlg-open");
   state.currentTask = null;
   await load();
 }
@@ -761,8 +827,30 @@ $("#btnNewManager").addEventListener("click", async () => {
   );
 });
 
-$("#dlgCancel").addEventListener("click", () => $("#taskDlg").close());
-$("#dlgClose").addEventListener("click", () => $("#taskDlg").close());
+$("#dlgCancel").addEventListener("click", () => {
+  $("#taskDlg").close();
+  document.body.classList.remove("dlg-open");
+});
+$("#dlgClose").addEventListener("click", () => {
+  $("#taskDlg").close();
+  document.body.classList.remove("dlg-open");
+});
+
+$("#taskDlg").addEventListener("close", () => {
+  document.body.classList.remove("dlg-open");
+});
+
+$("#taskDlg").addEventListener(
+  "wheel",
+  (e) => {
+    e.stopPropagation();
+  },
+  { passive: true }
+);
+
+$("#archiveMonth")?.addEventListener("change", () => {
+  if (state.view === "archive") renderArchive();
+});
 
 $("#dlgDelete").addEventListener("click", async () => {
   const id = Number($("#dlgForm").elements.id.value);
@@ -803,6 +891,7 @@ $("#dlgForm").addEventListener("submit", async (e) => {
       body: JSON.stringify(body),
     });
     $("#taskDlg").close();
+    document.body.classList.remove("dlg-open");
     await load();
   } catch (err) {
     alert(err.message || String(err));

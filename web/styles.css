@@ -417,6 +417,16 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
   gap: 0.65rem;
 }
 
+dialog.drawer #dlgForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  max-height: 92vh;
+  overflow: hidden;
+}
+
 #dlgForm label {
   display: grid;
   gap: 0.3rem;
@@ -431,6 +441,14 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
   gap: 0.5rem;
   padding: 0;
   margin: 0.35rem 0 0;
+}
+
+dialog.drawer #dlgForm > menu {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+  background: var(--panel);
 }
 
 #dlgForm menu .danger { margin-right: auto; }
@@ -584,12 +602,18 @@ dialog.drawer {
   max-height: 92vh;
   padding: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  overscroll-behavior: contain;
 }
 
 .drawer form {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   max-height: 92vh;
+  overflow: hidden;
 }
 
 .drawer-head {
@@ -598,6 +622,7 @@ dialog.drawer {
   align-items: center;
   padding: 0.9rem 1rem;
   border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
 }
 
 .drawer-head h3 { margin: 0; }
@@ -607,7 +632,10 @@ dialog.drawer {
   grid-template-columns: 1.4fr 0.85fr;
   gap: 0;
   overflow: auto;
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .drawer-main {
@@ -621,7 +649,23 @@ dialog.drawer {
   border-left: 1px solid var(--line);
   padding: 1rem;
   background: rgba(0, 0, 0, 0.15);
-  overflow: auto;
+}
+
+.drawer form > menu {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+  background: var(--panel);
+}
+
+.drawer form > menu .danger { margin-right: auto; }
+
+body.dlg-open {
+  overflow: hidden !important;
 }
 
 .drawer-side h4, .thread h4 {
