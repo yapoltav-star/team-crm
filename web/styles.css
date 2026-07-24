@@ -94,7 +94,7 @@ button.ghost {
 
 .layout {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 280px 1fr;
   min-height: calc(100vh - 64px);
 }
 
@@ -102,6 +102,7 @@ button.ghost {
   border-right: 1px solid var(--line);
   background: rgba(28, 25, 22, 0.85);
   padding: 1rem 0.85rem;
+  overflow: auto;
 }
 
 .people-head {
@@ -131,31 +132,71 @@ button.ghost {
 .people-list {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.75rem;
 }
 
-.people-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin-bottom: 0.55rem;
+.people-project {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 0.45rem 0.4rem 0.55rem;
 }
 
-.people-group-head {
+.people-project.active {
+  border-color: rgba(232, 164, 92, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(232, 164, 92, 0.2);
+}
+
+.people-project-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.35rem;
-  padding: 0.15rem 0.15rem 0.05rem;
+  gap: 0.25rem;
+  margin-bottom: 0.35rem;
 }
 
-.people-group-title {
-  font-size: 0.68rem;
+.people-project-title {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-weight: 800;
+  font-size: 0.92rem;
+  letter-spacing: -0.01em;
+  text-align: left;
+  padding: 0.35rem 0.4rem;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.people-project-title:hover {
+  background: rgba(255, 255, 255, 0.04);
+  filter: none;
+}
+
+.people-project-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  min-width: 1.2rem;
+  text-align: right;
+}
+
+.people-role {
+  margin: 0.15rem 0 0.35rem;
+  padding-left: 0.25rem;
+}
+
+.people-role-title {
+  font-size: 0.66rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--muted);
+  color: #c4a882;
   font-weight: 700;
-  padding: 0.2rem 0.35rem;
+  padding: 0.2rem 0.45rem 0.15rem;
 }
 
 .people-group-edit {
@@ -176,8 +217,8 @@ button.ghost {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text);
-  padding: 0.65rem 0.7rem;
-  border-radius: 12px;
+  padding: 0.45rem 0.55rem;
+  border-radius: 10px;
   gap: 0.35rem;
 }
 
@@ -222,8 +263,16 @@ button.ghost {
   border-color: rgba(232, 164, 92, 0.45);
 }
 
-.person-name { font-weight: 700; display: block; font-size: 0.95rem; }
+.person-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .person-role {
+  display: none;
+}
   display: block;
   font-size: 0.72rem;
   color: var(--muted);
@@ -319,8 +368,13 @@ button.ghost {
     flex-direction: row;
     overflow-x: auto;
     padding-bottom: 0.25rem;
+    align-items: stretch;
   }
-  .person { min-width: 150px; }
+  .people-project {
+    min-width: 220px;
+    flex-shrink: 0;
+  }
+  .person { min-width: 0; }
   .board { grid-template-columns: 1fr; }
 }
 

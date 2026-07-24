@@ -39,6 +39,7 @@ const state = {
   templates: [],
   dragId: null,
   selectedPersonId: null,
+  selectedProject: null,
   meId: Number(localStorage.getItem("crm_me_id") || 0) || null,
   currentTask: null,
 };
@@ -83,10 +84,27 @@ function taskHasAssignee(t, employeeId) {
 
 function filteredTasks() {
   const projectId = $("#projectFilter").value;
+  const projectPeople =
+    state.selectedProject && state.selectedProject !== "Владелец"
+      ? new Set(
+          visiblePeople()
+            .filter((e) => {
+              if (state.selectedProject === "Без проекта") {
+                return e.role !== "owner" && !String(e.team_group || "").trim();
+              }
+              return String(e.team_group || "").trim() === state.selectedProject;
+            })
+            .map((e) => e.id)
+        )
+      : null;
   return state.board.tasks.filter((t) => {
     if (projectId && String(t.project_id) !== projectId) return false;
     if (state.selectedPersonId && !taskHasAssignee(t, state.selectedPersonId)) {
       return false;
+    }
+    if (projectPeople && !state.selectedPersonId) {
+      const ids = taskAssigneeIds(t);
+      if (!ids.some((id) => projectPeople.has(id))) return false;
     }
     return true;
   });
@@ -194,31 +212,47 @@ function visiblePeople() {
   return all.filter((e) => allowed.has(e.id));
 }
 
-function peopleGroups(list) {
-  const map = new Map();
+function peopleTree(list) {
+  /** project → role → people */
+  const tree = new Map();
   for (const e of list) {
-    let g;
-    if (e.role === "owner") g = "Владелец";
-    else {
-      const title = String(e.job_title || "").trim();
-      const group = String(e.team_group || "").trim();
-      g = title || group || "Без роли";
-    }
-    if (!map.has(g)) map.set(g, []);
-    map.get(g).push(e);
+    const project =
+      e.role === "owner"
+        ? "Владелец"
+        : String(e.team_group || "").trim() || "Без проекта";
+    const role =
+      e.role === "owner"
+        ? "владелец"
+        : String(e.job_title || "").trim() || "без роли";
+    if (!tree.has(project)) tree.set(project, new Map());
+    const roles = tree.get(project);
+    if (!roles.has(role)) roles.set(role, []);
+    roles.get(role).push(e);
   }
-  return [...map.entries()].sort((a, b) => {
-    if (a[0] === "Владелец") return -1;
-    if (b[0] === "Владелец") return 1;
-    if (a[0] === "Без роли") return 1;
-    if (b[0] === "Без роли") return -1;
-    const ai = JOB_TITLE_ORDER[a[0]];
-    const bi = JOB_TITLE_ORDER[b[0]];
-    if (ai != null || bi != null) {
-      return (ai ?? 99) - (bi ?? 99) || a[0].localeCompare(b[0], "ru");
-    }
-    return a[0].localeCompare(b[0], "ru");
-  });
+
+  const sortRoles = (entries) =>
+    entries.sort((a, b) => {
+      if (a[0] === "владелец") return -1;
+      if (b[0] === "владелец") return 1;
+      if (a[0] === "без роли") return 1;
+      if (b[0] === "без роли") return -1;
+      const ai = JOB_TITLE_ORDER[a[0]];
+      const bi = JOB_TITLE_ORDER[b[0]];
+      if (ai != null || bi != null) {
+        return (ai ?? 99) - (bi ?? 99) || a[0].localeCompare(b[0], "ru");
+      }
+      return a[0].localeCompare(b[0], "ru");
+    });
+
+  return [...tree.entries()]
+    .sort((a, b) => {
+      if (a[0] === "Владелец") return -1;
+      if (b[0] === "Владелец") return 1;
+      if (a[0] === "Без проекта") return 1;
+      if (b[0] === "Без проекта") return -1;
+      return a[0].localeCompare(b[0], "ru");
+    })
+    .map(([project, roles]) => [project, sortRoles([...roles.entries()])]);
 }
 
 function updateMeLabel() {
@@ -226,6 +260,41 @@ function updateMeLabel() {
   $("#meLabel").textContent = m ? `вы: ${m.name}` : "не вошли";
   $("#btnNewManager")?.classList.toggle("hidden", Boolean(m && !isOwner()));
   $("#btnNewGroup")?.classList.toggle("hidden", !isOwner());
+}
+
+function renderPersonRow(m, owner) {
+  const row = document.createElement("div");
+  row.className =
+    "person" + (String(state.selectedPersonId) === String(m.id) ? " active" : "");
+  const open = openCount(m.id);
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "person-main";
+  main.innerHTML = `
+    <span class="person-name">${escapeHtml(m.name)}</span>
+    <span class="person-count">${open}</span>
+  `;
+  main.addEventListener("click", () => {
+    state.selectedPersonId = m.id;
+    state.selectedProject = String(m.team_group || "").trim() ||
+      (m.role === "owner" ? "Владелец" : "Без проекта");
+    $("#assignTo").value = "selected";
+    renderBoardView();
+  });
+  row.appendChild(main);
+  if (owner) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "ghost person-edit";
+    edit.title = "Проект, роль и доступы";
+    edit.textContent = "✎";
+    edit.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openEmployeeDialog(m);
+    });
+    row.appendChild(edit);
+  }
+  return row;
 }
 
 function renderPeople() {
@@ -241,69 +310,51 @@ function renderPeople() {
     return;
   }
   const owner = isOwner();
-  for (const [groupName, members] of peopleGroups(all)) {
+  for (const [projectName, roles] of peopleTree(all)) {
     const wrap = document.createElement("div");
-    wrap.className = "people-group";
+    wrap.className =
+      "people-project" +
+      (state.selectedProject === projectName && !state.selectedPersonId ? " active" : "");
+
     const head = document.createElement("div");
-    head.className = "people-group-head";
-    const title = document.createElement("div");
-    title.className = "people-group-title";
-    title.textContent = groupName;
-    head.appendChild(title);
-    if (
-      owner &&
-      groupName !== "Без роли" &&
-      groupName !== "Владелец" &&
-      JOB_TITLE_ORDER[groupName] == null
-    ) {
+    head.className = "people-project-head";
+    const titleBtn = document.createElement("button");
+    titleBtn.type = "button";
+    titleBtn.className = "people-project-title";
+    const memberCount = roles.reduce((n, [, members]) => n + members.length, 0);
+    titleBtn.innerHTML = `<span>${escapeHtml(projectName)}</span><span class="people-project-count">${memberCount}</span>`;
+    titleBtn.addEventListener("click", () => {
+      state.selectedProject = projectName;
+      state.selectedPersonId = null;
+      renderBoardView();
+    });
+    head.appendChild(titleBtn);
+
+    if (owner && projectName !== "Без проекта" && projectName !== "Владелец") {
       const editGrp = document.createElement("button");
       editGrp.type = "button";
       editGrp.className = "ghost people-group-edit";
-      editGrp.title = "Переименовать / состав";
+      editGrp.title = "Состав проекта";
       editGrp.textContent = "✎";
-      editGrp.addEventListener("click", () => openGroupDialog(groupName));
+      editGrp.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openGroupDialog(projectName);
+      });
       head.appendChild(editGrp);
     }
     wrap.appendChild(head);
 
-    for (const m of members) {
-      const row = document.createElement("div");
-      row.className =
-        "person" + (String(state.selectedPersonId) === String(m.id) ? " active" : "");
-      const open = openCount(m.id);
-      const roleLabel =
-        m.role === "owner"
-          ? "владелец"
-          : String(m.job_title || "").trim() || "без роли";
-      const main = document.createElement("button");
-      main.type = "button";
-      main.className = "person-main";
-      main.innerHTML = `
-        <span>
-          <span class="person-name">${escapeHtml(m.name)}</span>
-          <span class="person-role">${escapeHtml(roleLabel)}</span>
-        </span>
-        <span class="person-count">${open}</span>
-      `;
-      main.addEventListener("click", () => {
-        state.selectedPersonId = m.id;
-        $("#assignTo").value = "selected";
-        renderBoardView();
-      });
-      row.appendChild(main);
-      if (owner) {
-        const edit = document.createElement("button");
-        edit.type = "button";
-        edit.className = "ghost person-edit";
-        edit.title = "Имя и доступы";
-        edit.textContent = "✎";
-        edit.addEventListener("click", (e) => {
-          e.stopPropagation();
-          openEmployeeDialog(m);
-        });
-        row.appendChild(edit);
+    for (const [roleName, members] of roles) {
+      const roleBlock = document.createElement("div");
+      roleBlock.className = "people-role";
+      const roleTitle = document.createElement("div");
+      roleTitle.className = "people-role-title";
+      roleTitle.textContent = roleName;
+      roleBlock.appendChild(roleTitle);
+      for (const m of members) {
+        roleBlock.appendChild(renderPersonRow(m, owner));
       }
-      wrap.appendChild(row);
+      wrap.appendChild(roleBlock);
     }
     list.appendChild(wrap);
   }
@@ -311,21 +362,21 @@ function renderPeople() {
 
 function openGroupDialog(existingName) {
   if (!isOwner()) {
-    alert("Только владелец может управлять группами. Нажми «Войти» своим Telegram id.");
+    alert("Только владелец может управлять проектами. Нажми «Войти» своим Telegram id.");
     return;
   }
-  // Роли из списка — назначаются в карточке человека, не через «+ Группа»
   if (JOB_TITLE_ORDER[existingName] != null) {
-    alert(
-      `«${existingName}» — это роль.\nОткрой ✎ у человека и выбери роль в списке.`
-    );
+    alert(`«${existingName}» — это роль, не проект.\nРоль ставь в ✎ у человека.`);
     return;
   }
   const form = $("#groupForm");
-  const old = existingName && existingName !== "Без роли" ? existingName : "";
+  const old =
+    existingName && existingName !== "Без проекта" && existingName !== "Владелец"
+      ? existingName
+      : "";
   form.elements.old_name.value = old;
   form.elements.name.value = old;
-  $("#groupDlgTitle").textContent = old ? `Группа «${old}»` : "Новая группа";
+  $("#groupDlgTitle").textContent = old ? `Проект «${old}»` : "Новый проект";
   $("#groupDelete").classList.toggle("hidden", !old);
   const selected = new Set(
     people()
@@ -339,6 +390,7 @@ function openGroupDialog(existingName) {
       <input type="checkbox" value="${e.id}" ${selected.has(e.id) ? "checked" : ""} />
       <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
       ${escapeHtml(e.name)}
+      ${e.job_title ? ` · ${escapeHtml(e.job_title)}` : ""}
       ${e.role === "owner" ? " (владелец)" : ""}
     </label>`
     )
@@ -401,14 +453,27 @@ function closeDlg() {
 function renderManagerBar() {
   const hint = $("#emptyHint");
   const tasks = filteredTasks();
-  if (!state.selectedPersonId) {
-    $("#managerName").textContent = "Вся команда";
-    $("#managerSub").textContent = "Можно писать задачу себе, владельцу или выбранному человеку";
-  } else {
+  if (state.selectedPersonId) {
     const m = people().find((e) => e.id === state.selectedPersonId);
     $("#managerName").textContent = m ? m.name : "—";
     const open = tasks.filter((t) => t.status !== "done").length;
-    $("#managerSub").textContent = `Открытых: ${open} · всего: ${tasks.length}`;
+    const role = m?.job_title || (m?.role === "owner" ? "владелец" : "");
+    const proj = m?.team_group || "";
+    $("#managerSub").textContent = [
+      role,
+      proj ? `проект: ${proj}` : "",
+      `открытых: ${open}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  } else if (state.selectedProject) {
+    $("#managerName").textContent = state.selectedProject;
+    $("#managerSub").textContent = `Задачи участников проекта · открытых: ${
+      tasks.filter((t) => t.status !== "done").length
+    }`;
+  } else {
+    $("#managerName").textContent = "Все проекты";
+    $("#managerSub").textContent = "Слева проект → роль → человек";
   }
   hint.classList.toggle("hidden", tasks.length > 0);
 }
@@ -868,6 +933,16 @@ async function load() {
   ) {
     state.selectedPersonId = null;
   }
+  if (state.selectedProject) {
+    const names = new Set(
+      visiblePeople().map((e) =>
+        e.role === "owner"
+          ? "Владелец"
+          : String(e.team_group || "").trim() || "Без проекта"
+      )
+    );
+    if (!names.has(state.selectedProject)) state.selectedProject = null;
+  }
   await Promise.all([loadHome(), loadTemplates()]);
   render();
 }
@@ -886,6 +961,7 @@ $("#projectFilter").addEventListener("change", () => {
 
 $("#btnAllPeople").addEventListener("click", () => {
   state.selectedPersonId = null;
+  state.selectedProject = null;
   renderBoardView();
 });
 
@@ -1058,7 +1134,7 @@ $("#groupDelete")?.addEventListener("click", async () => {
   const form = $("#groupForm");
   const old = String(form.elements.old_name.value || "").trim();
   if (!old || !state.meId) return;
-  if (!confirm(`Расформировать группу «${old}»?\nЛюди останутся в команде без группы.`)) return;
+  if (!confirm(`Убрать проект «${old}»?\nУчастники останутся без проекта (роли сохранятся).`)) return;
   try {
     await api("/api/team-groups", {
       method: "POST",

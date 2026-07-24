@@ -17,7 +17,7 @@
       font-family: "Manrope", system-ui, sans-serif;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=job-titles-1" />
+  <link rel="stylesheet" href="/static/styles.css?v=project-roles-1" />
 </head>
 <body>
   <header class="top">
@@ -55,9 +55,9 @@
     <div class="layout">
       <aside class="people">
         <div class="people-head">
-          <h2>Команда</h2>
+          <h2>Проекты</h2>
           <div class="people-head-actions">
-            <button id="btnNewGroup" type="button" class="ghost hidden" title="Создать группу">+ Группа</button>
+            <button id="btnNewGroup" type="button" class="ghost hidden" title="Создать проект">+ Проект</button>
             <button id="btnAllPeople" type="button" class="ghost">Все</button>
           </div>
         </div>
@@ -197,7 +197,7 @@
       <label>Имя
         <input name="name" required autocomplete="off" />
       </label>
-      <label>Роль
+      <label>Роль на проекте
         <select name="job_title" id="empJobTitle">
           <option value="">Без роли</option>
           <option value="поддержка">поддержка</option>
@@ -208,8 +208,8 @@
           <option value="менеджер по китаю">менеджер по китаю</option>
         </select>
       </label>
-      <label>Группа
-        <input name="team_group" list="groupSuggestions" placeholder="необязательно" autocomplete="off" />
+      <label>Проект
+        <input name="team_group" list="groupSuggestions" placeholder="название проекта" autocomplete="off" />
         <datalist id="groupSuggestions"></datalist>
       </label>
       <fieldset class="assignees-box">
@@ -227,18 +227,18 @@
   <!-- GROUP CREATE / EDIT (owner) -->
   <dialog id="groupDlg">
     <form id="groupForm">
-      <h3 id="groupDlgTitle">Группа</h3>
+      <h3 id="groupDlgTitle">Проект</h3>
       <input type="hidden" name="old_name" />
-      <label>Название группы
-        <input name="name" required autocomplete="off" placeholder="например Склад" />
+      <label>Название проекта
+        <input name="name" required autocomplete="off" placeholder="например Wildberries" />
       </label>
       <fieldset class="assignees-box">
         <legend>Участники</legend>
-        <p class="field-hint">Отметь менеджеров, которые входят в эту группу.</p>
+        <p class="field-hint">Кто работает на этом проекте. Роль каждому потом в ✎ у человека.</p>
         <div id="groupMemberChecks" class="check-list"></div>
       </fieldset>
       <menu>
-        <button type="button" id="groupDelete" class="danger ghost hidden">Расформировать</button>
+        <button type="button" id="groupDelete" class="danger ghost hidden">Удалить проект</button>
         <button type="button" id="groupCancel" class="ghost">Отмена</button>
         <button type="submit">Сохранить</button>
       </menu>
@@ -290,6 +290,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=job-titles-1"></script>
+  <script src="/static/app.js?v=project-roles-1"></script>
 </body>
 </html>
