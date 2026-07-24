@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
-    # менеджер пишет /start или текст — сам появляется в команде
-    allow_self_join: bool = Field(default=True, alias="ALLOW_SELF_JOIN")
+    # устаревший авто-вход без одобрения (по умолчанию выкл — заявка владельцу)
+    allow_self_join: bool = Field(default=False, alias="ALLOW_SELF_JOIN")
 
     @field_validator(
         "telegram_proxy",

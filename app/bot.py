@@ -6,8 +6,17 @@ from datetime import date, datetime
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import CallbackQuery, Message, User
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    User,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -17,6 +26,27 @@ from app.models import Employee, Task, TaskAssignee, TaskRun
 from app.notify import done_kb, ensure_run, notify_task_assignee, resolve_run
 
 logger = logging.getLogger("crm-bot")
+
+
+class JoinForm(StatesGroup):
+    waiting_name = State()
+
+
+def join_kb(telegram_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Добавить в команду",
+                    callback_data=f"join:ok:{telegram_id}",
+                ),
+                InlineKeyboardButton(
+                    text="✕ Отклонить",
+                    callback_data=f"join:no:{telegram_id}",
+                ),
+            ]
+        ]
+    )
 
 
 def _tg_name(user: User) -> str:
@@ -44,24 +74,26 @@ async def ensure_member(
     settings: Settings,
     user: User,
     *,
-    create_if_missing: bool = True,
+    create_if_missing: bool = False,
 ) -> Employee | None:
+    """Вернуть активного сотрудника. Новых сам не создаёт — только через заявку/владельца."""
     tid = int(user.id)
     name = _tg_name(user)
     if tid == int(settings.owner_telegram_id):
         return await ensure_owner(session, tid, display_name=name)
 
     emp = await find_employee(session, tid)
-    if emp:
-        emp.active = True
-        # подтянуть имя из Telegram, если в CRM ещё заглушка
+    if emp and emp.active:
         if not emp.name or emp.name.startswith("User ") or emp.name.strip().lower() in {
             "владелец",
             "owner",
         }:
             emp.name = name
-        await session.commit()
+            await session.commit()
         return emp
+
+    if emp and not emp.active:
+        return None
 
     if not create_if_missing or not settings.allow_self_join:
         return None
@@ -386,7 +418,7 @@ def build_dispatcher(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[Bot, Dispatcher]:
     bot = Bot(token=settings.telegram_bot_token, session=_session(settings.telegram_proxy))
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
 
     help_common = (
         "Можно писать обычным текстом или голосом.\n"
@@ -401,39 +433,168 @@ def build_dispatcher(
     )
 
     @dp.message(CommandStart())
-    async def start(message: Message) -> None:
+    async def start(message: Message, state: FSMContext) -> None:
         if not message.from_user:
             return
+        await state.clear()
+        tid = int(message.from_user.id)
         async with session_factory() as session:
-            emp = await ensure_member(session, settings, message.from_user, create_if_missing=True)
-            if not emp:
-                await message.answer(
-                    "Нет доступа.\n"
-                    f"Твой Telegram id: <code>{message.from_user.id}</code>\n"
-                    "Перешли его владельцу — /add_manager",
-                    parse_mode="HTML",
+            if tid == int(settings.owner_telegram_id):
+                emp = await ensure_owner(
+                    session, tid, display_name=_tg_name(message.from_user)
                 )
-                return
-            if emp.role == "owner" or int(message.from_user.id) == int(settings.owner_telegram_id):
                 await message.answer(
                     "CRM-бот (владелец).\n"
-                    "/add_manager <id> <Имя>\n"
+                    "Когда кто-то напишет /start и имя — придёт заявка с кнопкой «Добавить».\n"
+                    "Или вручную: /add_manager <id> <Имя>\n"
                     "/task <id> | текст\n"
                     "/weekly <id> 1,3,5 10:00 | текст\n"
                     f"{help_common}"
                     "Канбан: сайт Railway."
                 )
                 return
-            await message.answer(f"Привет, {emp.name}! Ты в команде.\n{help_common}")
+
+            emp = await find_employee(session, tid)
+            if emp and emp.active:
+                await message.answer(f"Привет, {emp.name}! Ты в команде.\n{help_common}")
+                return
+
+            if emp and not emp.active:
+                await message.answer(
+                    f"Заявка уже отправлена владельцу (имя: {emp.name}).\n"
+                    "Жди подтверждения — или напиши другое имя, если ошибся."
+                )
+                await state.set_state(JoinForm.waiting_name)
+                return
+
+            await state.set_state(JoinForm.waiting_name)
+            await message.answer(
+                "Привет! Чтобы попасть в команду, напиши своё имя.\n"
+                "Например: <b>Иван</b>",
+                parse_mode="HTML",
+            )
+
+    @dp.message(StateFilter(JoinForm.waiting_name), F.text)
+    async def join_name(message: Message, state: FSMContext) -> None:
+        if not message.from_user or not message.text:
+            return
+        name = message.text.strip()
+        if name.startswith("/"):
+            await message.answer("Просто напиши имя без команды. Например: Иван")
+            return
+        if len(name) < 2:
+            await message.answer("Слишком коротко. Напиши имя нормально.")
+            return
+        name = name[:200]
+        tid = int(message.from_user.id)
+        uname = f"@{message.from_user.username}" if message.from_user.username else "—"
+
+        async with session_factory() as session:
+            emp = await find_employee(session, tid)
+            if emp and emp.active:
+                await state.clear()
+                await message.answer(f"Ты уже в команде как {emp.name}.")
+                return
+            if emp:
+                emp.name = name
+                emp.active = False
+                emp.role = "manager"
+            else:
+                emp = Employee(telegram_id=tid, name=name, role="manager", active=False)
+                session.add(emp)
+            await session.commit()
+
+        await state.clear()
+        await message.answer(
+            f"Ок, {name}. Отправил заявку владельцу — как подтвердит, напишу сюда."
+        )
+        try:
+            await message.bot.send_message(
+                int(settings.owner_telegram_id),
+                "👤 Новая заявка в команду\n\n"
+                f"Имя: <b>{name}</b>\n"
+                f"Telegram: {uname}\n"
+                f"id: <code>{tid}</code>\n\n"
+                "Добавить в CRM?",
+                parse_mode="HTML",
+                reply_markup=join_kb(tid),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("join notify owner failed tid=%s", tid)
+            await message.answer(
+                "Не смог достучаться до владельца. Скажи ему свой id:\n"
+                f"<code>{tid}</code>",
+                parse_mode="HTML",
+            )
+
+    @dp.callback_query(F.data.startswith("join:"))
+    async def on_join_decision(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        if int(callback.from_user.id) != int(settings.owner_telegram_id):
+            await callback.answer("Только владелец.", show_alert=True)
+            return
+        parts = callback.data.split(":")
+        if len(parts) != 3 or parts[1] not in {"ok", "no"} or not parts[2].isdigit():
+            await callback.answer("Битая кнопка")
+            return
+        decision, tid = parts[1], int(parts[2])
+        async with session_factory() as session:
+            emp = await find_employee(session, tid)
+            if not emp:
+                await callback.answer("Заявки уже нет", show_alert=True)
+                return
+            if decision == "ok":
+                emp.active = True
+                emp.role = "manager"
+                await session.commit()
+                name = emp.name
+                await callback.answer("Добавлен")
+                if callback.message:
+                    try:
+                        await callback.message.edit_text(
+                            f"✅ В команде: <b>{name}</b>\n"
+                            f"id: <code>{tid}</code>\n"
+                            f"Можно ставить задачи: /task {tid} | текст",
+                            parse_mode="HTML",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                try:
+                    await callback.bot.send_message(
+                        tid,
+                        f"✅ Тебя добавили в команду как <b>{name}</b>.\n"
+                        "Жми /start — можно брать задачи.",
+                        parse_mode="HTML",
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("join welcome failed tid=%s", tid)
+            else:
+                name = emp.name
+                await session.delete(emp)
+                await session.commit()
+                await callback.answer("Отклонено")
+                if callback.message:
+                    try:
+                        await callback.message.edit_text(f"✕ Отклонено: {name} ({tid})")
+                    except Exception:  # noqa: BLE001
+                        pass
+                try:
+                    await callback.bot.send_message(
+                        tid,
+                        "Заявку в команду не приняли. Если это ошибка — напиши владельцу.",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _author(session: AsyncSession, user: User | int) -> Employee | None:
         if isinstance(user, int):
-            # legacy call sites with bare id — lookup only, no invent name
             tid = int(user)
             if tid == int(settings.owner_telegram_id):
                 return await ensure_owner(session, tid)
-            return await find_employee(session, tid)
-        return await ensure_member(session, settings, user, create_if_missing=True)
+            emp = await find_employee(session, tid)
+            return emp if emp and emp.active else None
+        return await ensure_member(session, settings, user, create_if_missing=False)
 
     @dp.message(Command("todo"))
     async def cmd_todo(message: Message, command: CommandObject) -> None:
@@ -895,7 +1056,7 @@ def build_dispatcher(
         await message.answer(f"Распознал: {text}")
         await _handle_natural(message, text)
 
-    @dp.message(F.text)
+    @dp.message(F.text, ~StateFilter(JoinForm.waiting_name))
     async def on_text(message: Message) -> None:
         if not message.text or message.text.startswith("/"):
             return
