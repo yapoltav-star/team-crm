@@ -784,3 +784,21 @@ async def stock_watch_run(request: Request) -> dict:
         settings=settings,
         bot=bot,
     )
+
+
+@router.post("/digest/run")
+async def digest_run(
+    request: Request,
+    kind: str = Query("morning", pattern="^(morning|evening)$"),
+) -> dict:
+    """Ручная утренняя/вечерняя рассылка задач менеджерам."""
+    from app.task_digest import send_task_digests
+
+    settings = get_settings()
+    bot = getattr(request.app.state, "bot", None)
+    return await send_task_digests(
+        session_factory=SessionLocal,
+        settings=settings,
+        bot=bot,
+        kind=kind,
+    )

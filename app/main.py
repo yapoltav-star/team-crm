@@ -125,6 +125,55 @@ async def lifespan(app: FastAPI):
     if settings.bot_enabled and bot is not None:
         await materialize_and_notify(SessionLocal, bot, settings)
 
+        if settings.digest_enabled:
+            from apscheduler.triggers.cron import CronTrigger
+
+            from app.task_digest import _parse_hm, send_task_digests
+
+            mh, mm = _parse_hm(settings.digest_morning_time, (9, 0))
+            eh, em = _parse_hm(settings.digest_evening_time, (18, 0))
+
+            async def morning_digest() -> None:
+                result = await send_task_digests(
+                    session_factory=SessionLocal,
+                    settings=settings,
+                    bot=getattr(app.state, "bot", None),
+                    kind="morning",
+                )
+                logger.info("morning_digest: %s", result)
+
+            async def evening_digest() -> None:
+                result = await send_task_digests(
+                    session_factory=SessionLocal,
+                    settings=settings,
+                    bot=getattr(app.state, "bot", None),
+                    kind="evening",
+                )
+                logger.info("evening_digest: %s", result)
+
+            scheduler.add_job(
+                morning_digest,
+                CronTrigger(hour=mh, minute=mm, timezone=settings.tz_name),
+                id="digest_morning",
+                replace_existing=True,
+                max_instances=1,
+            )
+            scheduler.add_job(
+                evening_digest,
+                CronTrigger(hour=eh, minute=em, timezone=settings.tz_name),
+                id="digest_evening",
+                replace_existing=True,
+                max_instances=1,
+            )
+            logger.info(
+                "Task digests: morning %02d:%02d, evening %02d:%02d (%s)",
+                mh,
+                mm,
+                eh,
+                em,
+                settings.tz_name,
+            )
+
     from app.archive import archive_old_done_tasks
 
     async def archive_tick() -> None:
@@ -231,7 +280,7 @@ async def health() -> dict:
     settings = get_settings()
     return {
         "ok": True,
-        "build": "task-comments-2026-07-24",
+        "build": "task-digest-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "auth": bool(str(settings.web_password or "").strip()),

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     owner_telegram_id: int = Field(default=0, alias="OWNER_TELEGRAM_ID")
     tz_name: str = Field(default="Europe/Moscow", alias="TZ")
     escalate_time: str = Field(default="20:00", alias="ESCALATE_TIME")
+    # утренний/вечерний список задач менеджерам
+    digest_enabled: bool = Field(default=True, alias="DIGEST_ENABLED")
+    digest_morning_time: str = Field(default="09:00", alias="DIGEST_MORNING_TIME")
+    digest_evening_time: str = Field(default="18:00", alias="DIGEST_EVENING_TIME")
     telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")
     database_url: str = Field(default="", alias="DATABASE_URL")
     web_password: str = Field(default="", alias="WEB_PASSWORD")
@@ -53,6 +57,8 @@ class Settings(BaseSettings):
         "wb_dashboard_url",
         "stock_watch_days",
         "stock_watch_time",
+        "digest_morning_time",
+        "digest_evening_time",
         mode="before",
     )
     @classmethod
@@ -65,6 +71,7 @@ class Settings(BaseSettings):
         "allow_self_join",
         "stock_watch_enabled",
         "stock_require_buyouts",
+        "digest_enabled",
         mode="before",
     )
     @classmethod
