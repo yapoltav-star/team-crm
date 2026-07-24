@@ -72,7 +72,16 @@ function taskProjectName(t) {
   return "Без проекта";
 }
 
-const MM_COLORS = ["#2383e2", "#448361", "#dfab01", "#eb5757", "#9065b0", "#d9730d"];
+const MM_COLORS = [
+  { id: "yellow", hex: "#fff475", ink: "#1f1f1f" },
+  { id: "peach", hex: "#fad2cf", ink: "#1f1f1f" },
+  { id: "pink", hex: "#fdcfe8", ink: "#1f1f1f" },
+  { id: "purple", hex: "#d7aefb", ink: "#1f1f1f" },
+  { id: "blue", hex: "#aecbfa", ink: "#1f1f1f" },
+  { id: "cyan", hex: "#cbf0f8", ink: "#1f1f1f" },
+  { id: "lime", hex: "#ccff90", ink: "#1f1f1f" },
+  { id: "mint", hex: "#a7ffeb", ink: "#1f1f1f" },
+];
 
 const state = {
   view: localStorage.getItem("crm_view") || "home",
@@ -83,6 +92,10 @@ const state = {
   currentMap: null,
   mmScale: 1,
   mmPan: { x: 0, y: 0 },
+  mmTool: "select",
+  mmArrowFrom: null,
+  mmIdeaDraft: null,
+  mmSelectedColor: MM_COLORS[0].hex,
   dragId: null,
   selectedPersonId: null,
   selectedProject: null,
@@ -863,13 +876,17 @@ function render() {
   if (state.view === "archive") renderArchive();
 }
 
-/* —— Mind Map —— */
+/* —— Mind Map (Miro-like) —— */
+const MM_NODE_W = 168;
+const MM_NODE_H = 110;
+
 function mmRoot(nodes) {
-  return (nodes || []).find((n) => n.parent_id == null) || null;
+  return (nodes || []).find((n) => n.parent_id == null) || (nodes || [])[0] || null;
 }
 
 function showMmList() {
   state.currentMap = null;
+  state.mmArrowFrom = null;
   $("#mmListWrap")?.classList.remove("hidden");
   $("#mmEditorWrap")?.classList.add("hidden");
 }
@@ -877,6 +894,7 @@ function showMmList() {
 function showMmEditor() {
   $("#mmListWrap")?.classList.add("hidden");
   $("#mmEditorWrap")?.classList.remove("hidden");
+  setMmTool(state.mmTool || "select");
 }
 
 function renderMindmapList() {
@@ -906,6 +924,23 @@ function renderMindmapList() {
   }
 }
 
+function setMmTool(tool) {
+  state.mmTool = tool;
+  state.mmArrowFrom = null;
+  clearMmDraftArrow();
+  document.querySelectorAll("#mmTools .mm-tool").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tool === tool);
+  });
+  const canvas = $("#mmCanvas");
+  canvas?.classList.toggle("tool-sticky", tool === "sticky");
+  canvas?.classList.toggle("tool-arrow", tool === "arrow");
+  const hint = $("#mmToolHint");
+  if (!hint) return;
+  if (tool === "sticky") hint.textContent = "Кликни по доске — появится стикер";
+  else if (tool === "arrow") hint.textContent = "Кликни первую идею, потом вторую — нарисуется стрелка";
+  else hint.textContent = "Перетаскивай стикеры · двойной клик — редактировать · колёсико — масштаб";
+}
+
 function applyMmTransform() {
   const nodes = $("#mmNodes");
   const links = $("#mmLinks");
@@ -914,31 +949,111 @@ function applyMmTransform() {
   if (links) links.style.transform = t;
 }
 
+function mmNodeCenter(n) {
+  return { x: n.x + MM_NODE_W / 2, y: n.y + MM_NODE_H / 2 };
+}
+
+function mmArrowPath(a, b) {
+  const x1 = a.x;
+  const y1 = a.y;
+  const x2 = b.x;
+  const y2 = b.y;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const shorten = 36;
+  const sx = x1 + (dx / len) * 28;
+  const sy = y1 + (dy / len) * 28;
+  const ex = x2 - (dx / len) * shorten;
+  const ey = y2 - (dy / len) * shorten;
+  const mx = (sx + ex) / 2;
+  const my = (sy + ey) / 2;
+  const cx = mx - dy * 0.12;
+  const cy = my + dx * 0.12;
+  return `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
+}
+
+function clearMmDraftArrow() {
+  const draft = $("#mmDraftArrow");
+  if (draft) draft.setAttribute("d", "");
+}
+
 function drawMmLinks() {
+  const body = $("#mmLinksBody");
   const svg = $("#mmLinks");
   const map = state.currentMap;
-  if (!svg || !map) return;
+  if (!body || !svg || !map) return;
   const byId = Object.fromEntries((map.nodes || []).map((n) => [n.id, n]));
-  const lines = [];
-  for (const n of map.nodes || []) {
-    if (n.parent_id == null) continue;
-    const p = byId[n.parent_id];
-    if (!p) continue;
-    const x1 = p.x + 90;
-    const y1 = p.y + 28;
-    const x2 = n.x + 90;
-    const y2 = n.y + 28;
-    const mx = (x1 + x2) / 2;
-    lines.push(
-      `<path d="M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}" stroke="${escapeHtml(
-        n.color || "#2383e2"
-      )}" fill="none" stroke-width="2" opacity="0.65" />`
-    );
+  const parts = [];
+  for (const arrow of map.arrows || []) {
+    const from = byId[arrow.from_node_id];
+    const to = byId[arrow.to_node_id];
+    if (!from || !to) continue;
+    const d = mmArrowPath(mmNodeCenter(from), mmNodeCenter(to));
+    const color = escapeHtml(arrow.color || "#1f1f1f");
+    parts.push(`
+      <g class="mm-arrow-group" data-id="${arrow.id}">
+        <path class="mm-arrow-hit" d="${d}" fill="none" stroke="transparent" stroke-width="14" />
+        <path class="mm-arrow" d="${d}" fill="none" stroke="${color}" stroke-width="2.4"
+          marker-end="url(#mmArrowHead)" />
+      </g>
+    `);
   }
-  svg.innerHTML = lines.join("");
-  svg.setAttribute("width", "4000");
-  svg.setAttribute("height", "3000");
+  body.innerHTML = parts.join("");
+  svg.setAttribute("width", "5000");
+  svg.setAttribute("height", "4000");
+  body.querySelectorAll(".mm-arrow-group").forEach((g) => {
+    g.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (state.mmTool !== "select") return;
+      if (!confirm("Удалить стрелку?")) return;
+      try {
+        await api(`/api/mindmaps/${map.id}/arrows/${g.dataset.id}`, { method: "DELETE" });
+        await refreshCurrentMap();
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
   applyMmTransform();
+}
+
+function renderMmColorPicker(selected) {
+  const host = $("#mmIdeaColors");
+  if (!host) return;
+  host.innerHTML = MM_COLORS.map(
+    (c) =>
+      `<button type="button" class="mm-color-swatch${
+        c.hex === selected ? " active" : ""
+      }" data-color="${c.hex}" style="--sw:${c.hex}" title="${c.id}"></button>`
+  ).join("");
+  host.querySelectorAll(".mm-color-swatch").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.mmSelectedColor = btn.dataset.color;
+      host.querySelectorAll(".mm-color-swatch").forEach((b) => {
+        b.classList.toggle("active", b === btn);
+      });
+      const ta = $("#mmIdeaText");
+      if (ta) ta.style.background = state.mmSelectedColor;
+    });
+  });
+}
+
+function openMmIdeaDialog({ title, text, color, mode, parentId, x, y, nodeId }) {
+  state.mmIdeaDraft = { mode, parentId, x, y, nodeId };
+  state.mmSelectedColor = color || MM_COLORS[0].hex;
+  $("#mmIdeaDlgTitle").textContent = title;
+  const ta = $("#mmIdeaText");
+  ta.value = text || "";
+  ta.style.background = state.mmSelectedColor;
+  renderMmColorPicker(state.mmSelectedColor);
+  $("#mmIdeaDlg").showModal();
+  setTimeout(() => ta.focus(), 30);
+}
+
+function closeMmIdeaDialog() {
+  $("#mmIdeaDlg")?.close();
+  state.mmIdeaDraft = null;
 }
 
 function renderMmNodes() {
@@ -948,26 +1063,28 @@ function renderMmNodes() {
   host.innerHTML = "";
   for (const n of map.nodes || []) {
     const el = document.createElement("div");
-    el.className = "mm-node" + (n.parent_id == null ? " is-root" : "");
+    const isRoot = n.parent_id == null && n === mmRoot(map.nodes);
+    el.className =
+      "mm-sticky" +
+      (isRoot ? " is-root" : "") +
+      (state.mmArrowFrom === n.id ? " arrow-from" : "");
     el.dataset.id = String(n.id);
     el.style.left = `${n.x}px`;
     el.style.top = `${n.y}px`;
-    el.style.setProperty("--mm-color", n.color || "#2383e2");
+    el.style.setProperty("--sticky", n.color || "#fff475");
     el.innerHTML = `
-      <div class="mm-node-text">${escapeHtml(n.text)}</div>
-      <div class="mm-node-actions">
-        <button type="button" class="mm-add" title="Добавить ветку">+</button>
+      <div class="mm-sticky-text">${escapeHtml(n.text)}</div>
+      <div class="mm-sticky-foot">
         ${
-          n.parent_id == null
-            ? ""
-            : `<button type="button" class="mm-del" title="Удалить">×</button>`
+          n.created_by_name
+            ? `<span class="mm-sticky-author">${escapeHtml(n.created_by_name)}</span>`
+            : `<span></span>`
         }
+        <div class="mm-sticky-actions">
+          <button type="button" class="mm-add" title="Ветка">+</button>
+          <button type="button" class="mm-del" title="Удалить">×</button>
+        </div>
       </div>
-      ${
-        n.created_by_name
-          ? `<div class="mm-node-author">${escapeHtml(n.created_by_name)}</div>`
-          : ""
-      }
     `;
     bindMmNode(el, n);
     host.appendChild(el);
@@ -977,13 +1094,21 @@ function renderMmNodes() {
 }
 
 function bindMmNode(el, node) {
-  el.querySelector(".mm-add")?.addEventListener("click", async (e) => {
+  el.querySelector(".mm-add")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    await addMmChild(node.id);
+    openMmIdeaDialog({
+      title: "Новая идея",
+      text: "",
+      color: MM_COLORS[Math.floor(Math.random() * MM_COLORS.length)].hex,
+      mode: "create",
+      parentId: node.id,
+      x: node.x + 200,
+      y: node.y + (Math.random() * 80 - 40),
+    });
   });
   el.querySelector(".mm-del")?.addEventListener("click", async (e) => {
     e.stopPropagation();
-    if (!confirm("Удалить идею и все ветки?")) return;
+    if (!confirm("Удалить стикер?")) return;
     try {
       await api(`/api/mindmaps/${state.currentMap.id}/nodes/${node.id}`, {
         method: "DELETE",
@@ -995,17 +1120,60 @@ function bindMmNode(el, node) {
   });
   el.addEventListener("dblclick", (e) => {
     e.stopPropagation();
-    editMmNodeText(node);
+    if (state.mmTool === "arrow") return;
+    openMmIdeaDialog({
+      title: "Редактировать идею",
+      text: node.text || "",
+      color: node.color || MM_COLORS[0].hex,
+      mode: "edit",
+      nodeId: node.id,
+    });
+  });
+
+  el.addEventListener("click", async (e) => {
+    if (state.mmTool !== "arrow") return;
+    e.stopPropagation();
+    if (!state.mmArrowFrom) {
+      state.mmArrowFrom = node.id;
+      renderMmNodes();
+      $("#mmToolHint").textContent = "Теперь кликни вторую идею";
+      return;
+    }
+    if (state.mmArrowFrom === node.id) {
+      state.mmArrowFrom = null;
+      clearMmDraftArrow();
+      renderMmNodes();
+      return;
+    }
+    try {
+      await api(`/api/mindmaps/${state.currentMap.id}/arrows`, {
+        method: "POST",
+        body: JSON.stringify({
+          from_node_id: state.mmArrowFrom,
+          to_node_id: node.id,
+          created_by_id: state.meId || null,
+        }),
+      });
+      state.mmArrowFrom = null;
+      clearMmDraftArrow();
+      await refreshCurrentMap();
+      $("#mmToolHint").textContent = "Стрелка добавлена — можно провести ещё";
+    } catch (err) {
+      alert(err.message || String(err));
+    }
   });
 
   let dragging = false;
+  let moved = false;
   let startX = 0;
   let startY = 0;
   let origX = 0;
   let origY = 0;
   el.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".mm-node-actions")) return;
+    if (state.mmTool !== "select") return;
+    if (e.target.closest(".mm-sticky-actions")) return;
     dragging = true;
+    moved = false;
     el.setPointerCapture(e.pointerId);
     startX = e.clientX;
     startY = e.clientY;
@@ -1017,6 +1185,7 @@ function bindMmNode(el, node) {
     if (!dragging) return;
     const dx = (e.clientX - startX) / state.mmScale;
     const dy = (e.clientY - startY) / state.mmScale;
+    if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
     node.x = Math.round(origX + dx);
     node.y = Math.round(origY + dy);
     el.style.left = `${node.x}px`;
@@ -1032,7 +1201,7 @@ function bindMmNode(el, node) {
     } catch (_) {
       /* ignore */
     }
-    if (node.x === origX && node.y === origY) return;
+    if (!moved) return;
     try {
       await api(`/api/mindmaps/${state.currentMap.id}/nodes/${node.id}`, {
         method: "PATCH",
@@ -1045,54 +1214,20 @@ function bindMmNode(el, node) {
   });
 }
 
-async function editMmNodeText(node) {
-  const next = prompt("Текст идеи:", node.text || "");
-  if (next == null) return;
-  const text = next.trim();
-  if (!text || text === node.text) return;
-  try {
-    await api(`/api/mindmaps/${state.currentMap.id}/nodes/${node.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ text }),
-    });
-    const root = mmRoot(state.currentMap.nodes);
-    if (root && root.id === node.id) {
-      await api(`/api/mindmaps/${state.currentMap.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ title: text }),
-      });
-      $("#mmTitleInput").value = text;
-    }
-    await refreshCurrentMap();
-  } catch (err) {
-    alert(err.message || String(err));
-  }
-}
-
-async function addMmChild(parentId) {
-  if (!state.currentMap) return;
-  const text = prompt("Новая идея:", "Идея");
-  if (text == null) return;
-  const color = MM_COLORS[Math.floor(Math.random() * MM_COLORS.length)];
-  try {
-    await api(`/api/mindmaps/${state.currentMap.id}/nodes`, {
-      method: "POST",
-      body: JSON.stringify({
-        text: text.trim() || "Идея",
-        parent_id: parentId,
-        color,
-        created_by_id: state.meId || null,
-      }),
-    });
-    await refreshCurrentMap();
-  } catch (err) {
-    alert(err.message || String(err));
-  }
+function canvasToWorld(clientX, clientY) {
+  const canvas = $("#mmCanvas");
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: Math.round((clientX - rect.left - state.mmPan.x) / state.mmScale),
+    y: Math.round((clientY - rect.top - state.mmPan.y) / state.mmScale),
+  };
 }
 
 async function refreshCurrentMap() {
   if (!state.currentMap?.id) return;
+  const keepFrom = state.mmArrowFrom;
   state.currentMap = await api(`/api/mindmaps/${state.currentMap.id}`);
+  state.mmArrowFrom = keepFrom;
   $("#mmTitleInput").value = state.currentMap.title || "";
   renderMmNodes();
   await loadMindmaps();
@@ -1102,7 +1237,9 @@ async function openMindMap(id) {
   try {
     state.currentMap = await api(`/api/mindmaps/${id}`);
     state.mmScale = 1;
-    state.mmPan = { x: 40, y: 40 };
+    state.mmPan = { x: 60, y: 40 };
+    state.mmArrowFrom = null;
+    state.mmTool = "select";
     $("#mmTitleInput").value = state.currentMap.title || "";
     showMmEditor();
     renderMmNodes();
@@ -1771,37 +1908,20 @@ $("#tplForm").addEventListener("submit", async (e) => {
 });
 
 $("#btnNewMindMap")?.addEventListener("click", async () => {
-  const title = prompt("Название карты идей:", "Новая карта");
-  if (title == null) return;
-  try {
-    const created = await api("/api/mindmaps", {
-      method: "POST",
-      body: JSON.stringify({
-        title: title.trim() || "Новая карта",
-        created_by_id: state.meId || null,
-      }),
-    });
-    await loadMindmaps();
-    await openMindMap(created.id);
-  } catch (err) {
-    alert(err.message || String(err));
-  }
+  openMmIdeaDialog({
+    title: "Новая доска идей",
+    text: "Новая карта",
+    color: MM_COLORS[0].hex,
+    mode: "new-board",
+  });
 });
 
 $("#btnMmBack")?.addEventListener("click", async () => {
   state.currentMap = null;
+  state.mmArrowFrom = null;
   await loadMindmaps();
   showMmList();
   renderMindmapList();
-});
-
-$("#btnMmAddRootChild")?.addEventListener("click", async () => {
-  const root = mmRoot(state.currentMap?.nodes);
-  if (!root) {
-    alert("Нет корневой идеи");
-    return;
-  }
-  await addMmChild(root.id);
 });
 
 $("#btnMmDelete")?.addEventListener("click", async () => {
@@ -1813,6 +1933,78 @@ $("#btnMmDelete")?.addEventListener("click", async () => {
     await loadMindmaps();
     showMmList();
     renderMindmapList();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
+
+document.querySelectorAll("#mmTools .mm-tool").forEach((btn) => {
+  btn.addEventListener("click", () => setMmTool(btn.dataset.tool));
+});
+
+$("#mmIdeaClose")?.addEventListener("click", () => closeMmIdeaDialog());
+$("#mmIdeaCancel")?.addEventListener("click", () => closeMmIdeaDialog());
+
+$("#mmIdeaForm")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const draft = state.mmIdeaDraft;
+  if (!draft) return;
+  const text = String($("#mmIdeaText").value || "").trim();
+  if (!text) return;
+  const color = state.mmSelectedColor || MM_COLORS[0].hex;
+  try {
+    if (draft.mode === "new-board") {
+      const created = await api("/api/mindmaps", {
+        method: "POST",
+        body: JSON.stringify({
+          title: text,
+          created_by_id: state.meId || null,
+        }),
+      });
+      closeMmIdeaDialog();
+      await loadMindmaps();
+      await openMindMap(created.id);
+      const root = mmRoot(state.currentMap?.nodes);
+      if (root) {
+        await api(`/api/mindmaps/${created.id}/nodes/${root.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ color, text }),
+        });
+        await refreshCurrentMap();
+      }
+      return;
+    }
+    if (draft.mode === "edit" && draft.nodeId) {
+      await api(`/api/mindmaps/${state.currentMap.id}/nodes/${draft.nodeId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ text, color }),
+      });
+      const root = mmRoot(state.currentMap.nodes);
+      if (root && root.id === draft.nodeId) {
+        await api(`/api/mindmaps/${state.currentMap.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title: text }),
+        });
+      }
+      closeMmIdeaDialog();
+      await refreshCurrentMap();
+      return;
+    }
+    if (draft.mode === "create") {
+      await api(`/api/mindmaps/${state.currentMap.id}/nodes`, {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          color,
+          parent_id: draft.parentId ?? null,
+          x: draft.x ?? null,
+          y: draft.y ?? null,
+          created_by_id: state.meId || null,
+        }),
+      });
+      closeMmIdeaDialog();
+      await refreshCurrentMap();
+    }
   } catch (err) {
     alert(err.message || String(err));
   }
@@ -1830,14 +2022,7 @@ $("#mmTitleInput")?.addEventListener("input", () => {
         method: "PATCH",
         body: JSON.stringify({ title }),
       });
-      const root = mmRoot(state.currentMap.nodes);
-      if (root) {
-        await api(`/api/mindmaps/${state.currentMap.id}/nodes/${root.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ text: title }),
-        });
-      }
-      await refreshCurrentMap();
+      await loadMindmaps();
     } catch (err) {
       console.error(err);
     }
@@ -1853,7 +2038,22 @@ $("#mmTitleInput")?.addEventListener("input", () => {
   let ox = 0;
   let oy = 0;
   canvas.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".mm-node")) return;
+    if (e.target.closest(".mm-sticky")) return;
+    if (e.target.closest(".mm-arrow-group")) return;
+    if (state.mmTool === "sticky") {
+      const pos = canvasToWorld(e.clientX, e.clientY);
+      openMmIdeaDialog({
+        title: "Новая идея",
+        text: "",
+        color: state.mmSelectedColor || MM_COLORS[0].hex,
+        mode: "create",
+        parentId: null,
+        x: pos.x - MM_NODE_W / 2,
+        y: pos.y - MM_NODE_H / 2,
+      });
+      return;
+    }
+    if (state.mmTool !== "select") return;
     panning = true;
     canvas.setPointerCapture(e.pointerId);
     sx = e.clientX;
@@ -1863,6 +2063,17 @@ $("#mmTitleInput")?.addEventListener("input", () => {
     canvas.classList.add("panning");
   });
   canvas.addEventListener("pointermove", (e) => {
+    if (state.mmTool === "arrow" && state.mmArrowFrom && state.currentMap) {
+      const from = state.currentMap.nodes.find((n) => n.id === state.mmArrowFrom);
+      if (from) {
+        const draft = $("#mmDraftArrow");
+        const to = canvasToWorld(e.clientX, e.clientY);
+        if (draft) {
+          draft.setAttribute("d", mmArrowPath(mmNodeCenter(from), to));
+          draft.setAttribute("marker-end", "url(#mmArrowHeadDraft)");
+        }
+      }
+    }
     if (!panning) return;
     state.mmPan.x = ox + (e.clientX - sx);
     state.mmPan.y = oy + (e.clientY - sy);

@@ -230,6 +230,10 @@ class MindMap(Base):
         back_populates="mind_map",
         cascade="all, delete-orphan",
     )
+    arrows: Mapped[list[MindMapArrow]] = relationship(
+        back_populates="mind_map",
+        cascade="all, delete-orphan",
+    )
 
 
 class MindMapNode(Base):
@@ -243,7 +247,7 @@ class MindMapNode(Base):
     text: Mapped[str] = mapped_column(String(500), default="")
     x: Mapped[int] = mapped_column(Integer, default=0)
     y: Mapped[int] = mapped_column(Integer, default=0)
-    color: Mapped[str] = mapped_column(String(20), default="#2383e2")
+    color: Mapped[str] = mapped_column(String(20), default="#fff475")
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -253,3 +257,19 @@ class MindMapNode(Base):
         foreign_keys=[parent_id],
     )
     created_by: Mapped[Employee | None] = relationship(foreign_keys=[created_by_id])
+
+
+class MindMapArrow(Base):
+    """Стрелка между идеями на карте (как connector в Miro)."""
+
+    __tablename__ = "mind_map_arrows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    map_id: Mapped[int] = mapped_column(ForeignKey("mind_maps.id"), index=True)
+    from_node_id: Mapped[int] = mapped_column(ForeignKey("mind_map_nodes.id"), index=True)
+    to_node_id: Mapped[int] = mapped_column(ForeignKey("mind_map_nodes.id"), index=True)
+    color: Mapped[str] = mapped_column(String(20), default="#1f1f1f")
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    mind_map: Mapped[MindMap] = relationship(back_populates="arrows")

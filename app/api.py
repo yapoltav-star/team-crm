@@ -16,6 +16,7 @@ from app.models import (
     Employee,
     EmployeeAccess,
     MindMap,
+    MindMapArrow,
     MindMapNode,
     Project,
     Task,
@@ -34,6 +35,8 @@ from app.schemas import (
     EmployeePatch,
     EventOut,
     HomeOut,
+    MindMapArrowIn,
+    MindMapArrowOut,
     MindMapIn,
     MindMapNodeIn,
     MindMapNodeOut,
@@ -839,15 +842,27 @@ def _mind_node_out(n: MindMapNode) -> MindMapNodeOut:
         text=n.text or "",
         x=n.x or 0,
         y=n.y or 0,
-        color=n.color or "#2383e2",
+        color=n.color or "#fff475",
         created_by_id=n.created_by_id,
         created_by_name=n.created_by.name if n.created_by else None,
         created_at=n.created_at,
     )
 
 
+def _mind_arrow_out(a: MindMapArrow) -> MindMapArrowOut:
+    return MindMapArrowOut(
+        id=a.id,
+        map_id=a.map_id,
+        from_node_id=a.from_node_id,
+        to_node_id=a.to_node_id,
+        color=a.color or "#1f1f1f",
+        created_by_id=a.created_by_id,
+    )
+
+
 def _mind_map_out(m: MindMap, *, with_nodes: bool = False) -> MindMapOut:
     nodes = list(m.nodes or [])
+    arrows = list(m.arrows or [])
     return MindMapOut(
         id=m.id,
         title=m.title,
@@ -858,6 +873,7 @@ def _mind_map_out(m: MindMap, *, with_nodes: bool = False) -> MindMapOut:
         created_at=m.created_at,
         updated_at=m.updated_at,
         nodes=[_mind_node_out(n) for n in nodes] if with_nodes else [],
+        arrows=[_mind_arrow_out(a) for a in arrows] if with_nodes else [],
     )
 
 
@@ -868,8 +884,35 @@ async def _load_mind_map(session: AsyncSession, map_id: int) -> MindMap | None:
         .options(
             selectinload(MindMap.created_by),
             selectinload(MindMap.nodes).selectinload(MindMapNode.created_by),
+            selectinload(MindMap.arrows),
         )
     )
+
+
+async def _ensure_parent_arrows(session: AsyncSession, m: MindMap) -> bool:
+    """Старые parent_id → стрелки, один раз при открытии карты."""
+    existing = {(a.from_node_id, a.to_node_id) for a in (m.arrows or [])}
+    added = False
+    for n in m.nodes or []:
+        if n.parent_id is None:
+            continue
+        key = (n.parent_id, n.id)
+        if key in existing:
+            continue
+        session.add(
+            MindMapArrow(
+                map_id=m.id,
+                from_node_id=n.parent_id,
+                to_node_id=n.id,
+                color="#1f1f1f",
+            )
+        )
+        existing.add(key)
+        added = True
+    if added:
+        m.updated_at = datetime.utcnow()
+        await session.commit()
+    return added
 
 
 @router.get("/mindmaps", response_model=list[MindMapOut])
@@ -907,7 +950,7 @@ async def create_mindmap(
         text=title,
         x=420,
         y=280,
-        color="#2383e2",
+        color="#fff475",
         created_by_id=body.created_by_id,
     )
     session.add(root)
@@ -924,6 +967,9 @@ async def get_mindmap(
     m = await _load_mind_map(session, map_id)
     if not m:
         raise HTTPException(404, "Mind map not found")
+    if await _ensure_parent_arrows(session, m):
+        m = await _load_mind_map(session, map_id)
+        assert m is not None
     return _mind_map_out(m, with_nodes=True)
 
 
@@ -985,10 +1031,21 @@ async def create_mind_node(
         text=(body.text or "Идея").strip() or "Идея",
         x=x,
         y=y,
-        color=(body.color or (parent.color if parent else "#2383e2"))[:20],
+        color=(body.color or "#fff475")[:20],
         created_by_id=body.created_by_id,
     )
     session.add(node)
+    await session.flush()
+    if body.parent_id is not None:
+        session.add(
+            MindMapArrow(
+                map_id=map_id,
+                from_node_id=body.parent_id,
+                to_node_id=node.id,
+                color="#1f1f1f",
+                created_by_id=body.created_by_id,
+            )
+        )
     m.updated_at = datetime.utcnow()
     await session.commit()
     node = await session.scalar(
@@ -1046,21 +1103,70 @@ async def delete_mind_node(
     node = next((n for n in m.nodes if n.id == node_id), None)
     if not node:
         raise HTTPException(404, "Node not found")
-    if node.parent_id is None:
-        raise HTTPException(400, "Корневую идею удалить нельзя")
+    if len(m.nodes) <= 1:
+        raise HTTPException(400, "Нельзя удалить последнюю идею на карте")
 
-    def collect(nid: int) -> list[int]:
-        kids = [n.id for n in m.nodes if n.parent_id == nid]
-        out = [nid]
-        for kid in kids:
-            out.extend(collect(kid))
-        return out
-
-    ids = collect(node_id)
-    await session.execute(delete(MindMapNode).where(MindMapNode.id.in_(ids)))
+    await session.execute(
+        delete(MindMapArrow).where(
+            MindMapArrow.map_id == map_id,
+            or_(
+                MindMapArrow.from_node_id == node_id,
+                MindMapArrow.to_node_id == node_id,
+            ),
+        )
+    )
+    for child in m.nodes:
+        if child.parent_id == node_id:
+            child.parent_id = None
+    await session.delete(node)
     m.updated_at = datetime.utcnow()
     await session.commit()
-    return {"ok": True, "deleted": len(ids)}
+    return {"ok": True}
+
+
+@router.post("/mindmaps/{map_id}/arrows", response_model=MindMapArrowOut)
+async def create_mind_arrow(
+    map_id: int, body: MindMapArrowIn, session: AsyncSession = Depends(get_session)
+) -> MindMapArrowOut:
+    m = await _load_mind_map(session, map_id)
+    if not m:
+        raise HTTPException(404, "Mind map not found")
+    ids = {n.id for n in m.nodes}
+    if body.from_node_id not in ids or body.to_node_id not in ids:
+        raise HTTPException(400, "Node not found")
+    if body.from_node_id == body.to_node_id:
+        raise HTTPException(400, "Нельзя соединить идею саму с собой")
+    for a in m.arrows or []:
+        if a.from_node_id == body.from_node_id and a.to_node_id == body.to_node_id:
+            return _mind_arrow_out(a)
+    arrow = MindMapArrow(
+        map_id=map_id,
+        from_node_id=body.from_node_id,
+        to_node_id=body.to_node_id,
+        color=(body.color or "#1f1f1f")[:20],
+        created_by_id=body.created_by_id,
+    )
+    session.add(arrow)
+    m.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(arrow)
+    return _mind_arrow_out(arrow)
+
+
+@router.delete("/mindmaps/{map_id}/arrows/{arrow_id}")
+async def delete_mind_arrow(
+    map_id: int, arrow_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    m = await _load_mind_map(session, map_id)
+    if not m:
+        raise HTTPException(404, "Mind map not found")
+    arrow = next((a for a in m.arrows if a.id == arrow_id), None)
+    if not arrow:
+        raise HTTPException(404, "Arrow not found")
+    await session.delete(arrow)
+    m.updated_at = datetime.utcnow()
+    await session.commit()
+    return {"ok": True}
 
 
 @router.post("/stock-watch/run")

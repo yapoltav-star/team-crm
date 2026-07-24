@@ -250,6 +250,24 @@ class MindMapNodeOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MindMapArrowIn(BaseModel):
+    from_node_id: int
+    to_node_id: int
+    color: str = "#1f1f1f"
+    created_by_id: int | None = None
+
+
+class MindMapArrowOut(BaseModel):
+    id: int
+    map_id: int
+    from_node_id: int
+    to_node_id: int
+    color: str = "#1f1f1f"
+    created_by_id: int | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class MindMapOut(BaseModel):
     id: int
     title: str
@@ -260,5 +278,6 @@ class MindMapOut(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     nodes: list[MindMapNodeOut] = Field(default_factory=list)
+    arrows: list[MindMapArrowOut] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}

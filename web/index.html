@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-3" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-4" />
 </head>
 <body>
   <header class="top">
@@ -134,21 +134,59 @@
       <div id="mmList" class="tpl-list"></div>
     </div>
     <div id="mmEditorWrap" class="mm-editor-wrap hidden">
-      <div class="mm-toolbar">
+      <div class="mm-topbar">
         <button type="button" id="btnMmBack" class="ghost">← К картам</button>
-        <input id="mmTitleInput" type="text" maxlength="300" placeholder="Название карты" />
-        <div class="mm-toolbar-actions">
-          <button type="button" id="btnMmAddRootChild" title="Добавить идею от корня">+ Идея</button>
-          <button type="button" id="btnMmDelete" class="ghost danger" title="Удалить карту">Удалить</button>
-        </div>
+        <input id="mmTitleInput" type="text" maxlength="300" placeholder="Название доски" />
+        <button type="button" id="btnMmDelete" class="ghost danger" title="Удалить карту">Удалить</button>
       </div>
-      <p class="mm-hint">Двойной клик — текст · перетащи узел · «+» у узла — ветка · колёсико — масштаб</p>
-      <div id="mmCanvas" class="mm-canvas">
-        <svg id="mmLinks" class="mm-links"></svg>
-        <div id="mmNodes" class="mm-nodes"></div>
+      <div class="mm-stage">
+        <aside class="mm-tools" id="mmTools">
+          <button type="button" class="mm-tool active" data-tool="select" title="Выбрать / двигать">
+            <span>↖</span>
+          </button>
+          <button type="button" class="mm-tool" data-tool="sticky" title="Стикер">
+            <span class="mm-tool-sticky"></span>
+          </button>
+          <button type="button" class="mm-tool" data-tool="arrow" title="Стрелка">
+            <span>↗</span>
+          </button>
+        </aside>
+        <div id="mmCanvas" class="mm-canvas">
+          <svg id="mmLinks" class="mm-links">
+            <defs>
+              <marker id="mmArrowHead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L9,3 z" fill="#1f1f1f"></path>
+              </marker>
+              <marker id="mmArrowHeadDraft" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L9,3 z" fill="#2383e2"></path>
+              </marker>
+            </defs>
+            <g id="mmLinksBody"></g>
+            <path id="mmDraftArrow" class="mm-draft-arrow" d="" fill="none"></path>
+          </svg>
+          <div id="mmNodes" class="mm-nodes"></div>
+        </div>
+        <div id="mmToolHint" class="mm-tool-hint">Выбери инструмент слева</div>
       </div>
     </div>
   </section>
+
+  <dialog id="mmIdeaDlg" class="mm-idea-dlg">
+    <form id="mmIdeaForm" method="dialog">
+      <header>
+        <h3 id="mmIdeaDlgTitle">Новая идея</h3>
+        <button type="button" id="mmIdeaClose" class="ghost">✕</button>
+      </header>
+      <label class="mm-idea-label">Текст
+        <textarea id="mmIdeaText" rows="4" maxlength="500" placeholder="Напиши идею…" required></textarea>
+      </label>
+      <div class="mm-idea-colors" id="mmIdeaColors"></div>
+      <menu>
+        <button type="button" id="mmIdeaCancel" class="ghost">Отмена</button>
+        <button type="submit" id="mmIdeaSave">Сохранить</button>
+      </menu>
+    </form>
+  </dialog>
 
   <!-- ARCHIVE -->
   <section id="viewArchive" class="view hidden">
@@ -332,6 +370,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-3"></script>
+  <script src="/static/app.js?v=pw-4"></script>
 </body>
 </html>
