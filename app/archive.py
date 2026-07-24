@@ -9,12 +9,39 @@ from sqlalchemy import extract, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from app.models import Task, TaskAssignee
+from app.models import Employee, Task, TaskAssignee
 from app.tasks_service import add_event
 
 logger = logging.getLogger("archive")
 
 ARCHIVE_AFTER_DAYS = 7
+
+
+async def archive_one_task(
+    session: AsyncSession, task: Task, *, actor_id: int | None = None
+) -> Task:
+    """Сразу отправить выполненную задачу в архив."""
+    if task.status != "done":
+        raise ValueError("В архив можно только выполненные задачи")
+    if task.archived_at is not None:
+        return task
+    now = datetime.utcnow()
+    if task.completed_at is None:
+        task.completed_at = now
+    task.archived_at = now
+    who = "кто-то"
+    if actor_id:
+        emp = await session.get(Employee, actor_id)
+        if emp:
+            who = emp.name
+    await add_event(
+        session,
+        task.id,
+        f"Отправлена в архив — {who}",
+        kind="archived",
+        actor_id=actor_id,
+    )
+    return task
 
 
 async def archive_old_done_tasks(

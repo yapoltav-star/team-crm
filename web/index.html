@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-1" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-2" />
 </head>
 <body>
   <header class="top">
@@ -37,17 +37,13 @@
       <button type="button" data-view="archive">Архив</button>
     </nav>
     <div class="filters">
-      <select id="projectFilter"><option value="">Все проекты</option></select>
-      <button id="btnNewProject" type="button">+ Проект</button>
-      <button id="btnNewManager" type="button">+ Менеджер</button>
       <button id="btnTheme" type="button" class="theme-toggle" title="Тема">
         <span class="theme-icon" id="themeIcon">☾</span>
         <span id="themeLabel">Тёмная</span>
       </button>
+      <button id="meLabel" type="button" class="me-label" title="Войти или сменить имя">не вошли</button>
       <button id="btnLogin" type="button" class="ghost" title="Кто ты в Project Workflow">Войти</button>
-      <button id="btnRename" type="button" class="ghost" title="Сменить имя">Имя</button>
-      <button id="btnLogout" type="button" class="ghost" title="Выйти с сайта">Выйти</button>
-      <span id="meLabel" class="me-label">не вошли</span>
+      <button id="btnLogout" type="button" class="ghost hidden" title="Выйти с сайта">Выйти</button>
     </div>
   </header>
 
@@ -59,6 +55,10 @@
         <p id="homeHint">Войди — увидишь свои задачи.</p>
       </div>
       <div id="homeGrid" class="home-grid"></div>
+      <section id="homeStats" class="home-stats hidden">
+        <h2>По сотрудникам</h2>
+        <div id="homeStatsList" class="home-stats-list"></div>
+      </section>
     </div>
   </section>
 
@@ -126,7 +126,7 @@
       <div class="tpl-head">
         <div>
           <h1>Архив</h1>
-          <p>Выполненные задачи через 7 дней попадают сюда — по месяцам.</p>
+          <p>Сюда попадают выполненные задачи: вручную с доски или автоматически через 7 дней.</p>
         </div>
         <select id="archiveMonth"></select>
       </div>
@@ -302,6 +302,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-1"></script>
+  <script src="/static/app.js?v=pw-2"></script>
 </body>
 </html>

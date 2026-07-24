@@ -683,6 +683,32 @@ async def delete_task(
     return {"ok": True}
 
 
+@router.post("/tasks/{task_id}/archive", response_model=TaskOut)
+async def archive_task(
+    task_id: int,
+    actor_id: int | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+) -> TaskOut:
+    """Вручную отправить выполненную задачу в архив."""
+    from app.archive import archive_one_task
+
+    settings = get_settings()
+    today = datetime.now(settings.tz).date()
+    task = await session.get(Task, task_id)
+    if not task or not task.active:
+        raise HTTPException(404, "Task not found")
+    if task.archived_at is not None:
+        task = await load_task_full(session, task_id)
+        return _task_out(task, today=today, with_thread=True)
+    try:
+        await archive_one_task(session, task, actor_id=actor_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    await session.commit()
+    task = await load_task_full(session, task_id)
+    return _task_out(task, today=today, with_thread=True)
+
+
 @router.get("/archive/months")
 async def archive_months(session: AsyncSession = Depends(get_session)) -> list[dict]:
     from app.archive import list_archive_months

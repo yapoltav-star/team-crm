@@ -139,7 +139,6 @@ function taskHasAssignee(t, employeeId) {
 }
 
 function filteredTasks() {
-  const projectId = $("#projectFilter").value;
   const projectPeople =
     state.selectedProject && state.selectedProject !== "Владелец"
       ? new Set(
@@ -154,7 +153,6 @@ function filteredTasks() {
         )
       : null;
   return state.board.tasks.filter((t) => {
-    if (projectId && String(t.project_id) !== projectId) return false;
     if (state.selectedPersonId && !taskHasAssignee(t, state.selectedPersonId)) {
       return false;
     }
@@ -242,17 +240,10 @@ function setView(view) {
   document.querySelectorAll("#navTabs button").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === view);
   });
-  $("#projectFilter").classList.toggle("hidden", view === "templates" || view === "archive");
 }
 
 function fillSelects() {
-  const projects = state.board?.projects || [];
-  const pf = $("#projectFilter");
-  const cur = pf.value;
-  pf.innerHTML =
-    `<option value="">Все проекты</option>` +
-    projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
-  pf.value = cur;
+  /* project filter removed from header — sidebar filters the board */
 }
 
 function isOwner() {
@@ -313,9 +304,38 @@ function peopleTree(list) {
 
 function updateMeLabel() {
   const m = me();
-  $("#meLabel").textContent = m ? `вы: ${m.name}` : "не вошли";
-  $("#btnNewManager")?.classList.toggle("hidden", Boolean(m && !isOwner()));
+  const label = $("#meLabel");
+  const login = $("#btnLogin");
+  const logout = $("#btnLogout");
+  if (m) {
+    label.textContent = `вы: ${m.name}`;
+    label.title = "Нажми, чтобы сменить имя";
+    label.classList.add("is-user");
+    login?.classList.add("hidden");
+    logout?.classList.remove("hidden");
+  } else {
+    label.textContent = "не вошли";
+    label.title = "Нажми, чтобы войти";
+    label.classList.remove("is-user");
+    login?.classList.remove("hidden");
+    logout?.classList.add("hidden");
+  }
   $("#btnNewGroup")?.classList.toggle("hidden", !isOwner());
+}
+
+async function renameEmployee(emp, { promptLabel } = {}) {
+  if (!emp?.id) return;
+  const current = emp.name || "";
+  const name = prompt(
+    promptLabel || "Как зовут в Project Workflow?",
+    current || ""
+  );
+  if (!name || !name.trim() || name.trim() === current) return;
+  await api(`/api/employees/${emp.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: name.trim() }),
+  });
+  await load();
 }
 
 function renderPersonRow(m, owner) {
@@ -326,8 +346,11 @@ function renderPersonRow(m, owner) {
   const main = document.createElement("button");
   main.type = "button";
   main.className = "person-main";
+  const canRenameSelf = state.meId && Number(m.id) === Number(state.meId);
   main.innerHTML = `
-    <span class="person-name">${escapeHtml(m.name)}</span>
+    <span class="person-name${canRenameSelf ? " can-rename" : ""}" title="${
+      canRenameSelf ? "Двойной клик — сменить имя" : ""
+    }">${escapeHtml(m.name)}</span>
     <span class="person-count">${open}</span>
   `;
   main.addEventListener("click", () => {
@@ -337,6 +360,19 @@ function renderPersonRow(m, owner) {
     $("#assignTo").value = "selected";
     renderBoardView();
   });
+  if (canRenameSelf) {
+    main.addEventListener("dblclick", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        await renameEmployee(m, {
+          promptLabel: "Как тебя зовут в Project Workflow?",
+        });
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  }
   row.appendChild(main);
   if (owner) {
     const edit = document.createElement("button");
@@ -558,9 +594,14 @@ function cardHtml(t) {
       ? [{ id: t.assignee_id, name: t.assignee_name }]
       : [];
   const desc = cardDisplayDescription(t.description);
+  const archiveBtn =
+    t.status === "done"
+      ? `<button type="button" class="btn-archive" title="В архив">Архив</button>`
+      : "";
   return `
     ${dueDot(t.due_flag)}
     <div class="card-actions">
+      ${archiveBtn}
       <button type="button" class="btn-edit" title="Открыть">✎</button>
       <button type="button" class="btn-del danger" title="Удалить">✕</button>
     </div>
@@ -581,14 +622,29 @@ function paintCard(el, t) {
   el.style.setProperty("--project-color", color);
 }
 
+async function archiveTask(t) {
+  if (!confirm(`Отправить «${t.title}» в архив?`)) return;
+  const q = state.meId ? `?actor_id=${state.meId}` : "";
+  await api(`/api/tasks/${t.id}/archive${q}`, { method: "POST" });
+  await load();
+}
+
 function bindCard(card, t) {
-  card.querySelector(".btn-edit").addEventListener("click", (e) => {
+  card.querySelector(".btn-edit")?.addEventListener("click", (e) => {
     e.stopPropagation();
     openTaskDialog(t.id);
   });
-  card.querySelector(".btn-del").addEventListener("click", async (e) => {
+  card.querySelector(".btn-del")?.addEventListener("click", async (e) => {
     e.stopPropagation();
     await deleteTask(t);
+  });
+  card.querySelector(".btn-archive")?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      await archiveTask(t);
+    } catch (err) {
+      alert(err.message || String(err));
+    }
   });
   card.addEventListener("dblclick", () => openTaskDialog(t.id));
   card.addEventListener("click", (e) => {
@@ -656,18 +712,64 @@ function renderBoard() {
   }
 }
 
+function renderHomeStats() {
+  const wrap = $("#homeStats");
+  const list = $("#homeStatsList");
+  if (!wrap || !list) return;
+  if (!state.meId || !state.board) {
+    wrap.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  const tasks = state.board.tasks || [];
+  const rows = visiblePeople().map((e) => {
+    const mine = tasks.filter((t) => taskHasAssignee(t, e.id));
+    const open = mine.filter((t) => t.status !== "done").length;
+    const done = mine.filter((t) => t.status === "done").length;
+    const total = open + done;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    return { e, open, done, total, pct };
+  });
+  if (!rows.length) {
+    wrap.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  wrap.classList.remove("hidden");
+  list.innerHTML = rows
+    .map(
+      ({ e, open, pct }) => `
+      <div class="home-stats-row">
+        <div class="home-stats-name">
+          <span class="avatar">${escapeHtml(initials(e.name))}</span>
+          <span>${escapeHtml(e.name)}</span>
+        </div>
+        <div class="home-stats-meta">
+          <span>висит ${open}</span>
+          <span class="home-stats-pct">${pct}% выполнено</span>
+        </div>
+        <div class="home-stats-bar" aria-hidden="true">
+          <i style="width:${pct}%"></i>
+        </div>
+      </div>`
+    )
+    .join("");
+}
+
 function renderHome() {
   const grid = $("#homeGrid");
   const hint = $("#homeHint");
   if (!state.meId) {
     hint.textContent = "Войди — увидишь свои задачи.";
-    grid.innerHTML = `<div class="home-empty">Нажми «Войти» сверху.</div>`;
+    grid.innerHTML = `<div class="home-empty">Нажми «Войти» сверху или на «не вошли».</div>`;
+    renderHomeStats();
     return;
   }
   const m = me();
   hint.textContent = m ? `${m.name}, твои задачи` : "Твои задачи";
   if (!state.home) {
     grid.innerHTML = `<div class="home-empty">Загрузка…</div>`;
+    renderHomeStats();
     return;
   }
   grid.innerHTML = "";
@@ -694,6 +796,7 @@ function renderHome() {
     box.appendChild(list);
     grid.appendChild(box);
   }
+  renderHomeStats();
 }
 
 function renderTemplates() {
@@ -1032,10 +1135,6 @@ document.querySelectorAll("#navTabs button").forEach((btn) => {
   });
 });
 
-$("#projectFilter").addEventListener("change", () => {
-  if (state.view === "board") renderBoardView();
-});
-
 $("#btnAllPeople").addEventListener("click", () => {
   state.selectedPersonId = null;
   state.selectedProject = null;
@@ -1052,7 +1151,7 @@ $("#btnLogout").addEventListener("click", async () => {
   location.href = "/login";
 });
 
-$("#btnLogin").addEventListener("click", async () => {
+async function loginAsEmployee() {
   const tid = prompt("Твой Telegram numeric id (как в userinfobot):");
   if (!tid || !/^\d+$/.test(tid)) return;
   let emp = people().find((e) => String(e.telegram_id) === String(tid));
@@ -1079,22 +1178,25 @@ $("#btnLogin").addEventListener("click", async () => {
   state.meId = emp.id;
   localStorage.setItem("crm_me_id", String(emp.id));
   await load();
+}
+
+$("#btnLogin").addEventListener("click", () => {
+  loginAsEmployee().catch((err) => alert(err.message || String(err)));
 });
 
-$("#btnRename").addEventListener("click", async () => {
+$("#meLabel").addEventListener("click", async () => {
   if (!state.meId) {
-    alert("Сначала нажми «Войти»");
+    try {
+      await loginAsEmployee();
+    } catch (err) {
+      alert(err.message || String(err));
+    }
     return;
   }
-  const current = me()?.name || "";
-  const name = prompt("Как тебя зовут в Project Workflow?", current || "Ярослав");
-  if (!name || !name.trim()) return;
   try {
-    await api(`/api/employees/${state.meId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ name: name.trim() }),
+    await renameEmployee(me(), {
+      promptLabel: "Как тебя зовут в Project Workflow?",
     });
-    await load();
   } catch (err) {
     alert(err.message || String(err));
   }
@@ -1111,14 +1213,13 @@ $("#quickAdd").addEventListener("submit", async (e) => {
       return;
     }
     const assigneeId = resolveAssigneeId($("#assignTo").value);
-    const projectId = $("#projectFilter").value;
     const due = $("#quickDue").value || null;
     const created = await api("/api/tasks", {
       method: "POST",
       body: JSON.stringify({
         title,
         description: "",
-        project_id: projectId ? Number(projectId) : null,
+        project_id: null,
         assignee_id: Number(assigneeId),
         assignee_ids: [Number(assigneeId)],
         created_by_id: Number(state.meId),
@@ -1145,34 +1246,6 @@ $("#quickAdd").addEventListener("submit", async (e) => {
   } catch (err) {
     alert(err.message || String(err));
   }
-});
-
-$("#btnNewProject").addEventListener("click", async () => {
-  const name = prompt("Название проекта:");
-  if (!name) return;
-  await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) });
-  await load();
-});
-
-$("#btnNewManager").addEventListener("click", async () => {
-  const name = prompt("Имя менеджера:");
-  const tid = prompt("Telegram numeric id:");
-  if (!name || !tid) return;
-  if (!/^\d+$/.test(String(tid).trim())) {
-    alert("Telegram id должен быть числом (как в @userinfobot)");
-    return;
-  }
-  const emp = await api("/api/employees", {
-    method: "POST",
-    body: JSON.stringify({ name, telegram_id: Number(tid), role: "manager" }),
-  });
-  await load();
-  state.selectedPersonId = emp.id;
-  setView("board");
-  render();
-  alert(
-    `${name} добавлен(а).\n\nВажно: пусть откроет вашего бота в Telegram и нажмёт /start — иначе задачи не дойдут.`
-  );
 });
 
 $("#dlgCancel").addEventListener("click", (e) => {
