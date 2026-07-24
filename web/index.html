@@ -3,23 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Team CRM</title>
+  <title>Project Workflow</title>
+  <script>
+    (function () {
+      var t = localStorage.getItem("pw_theme") || localStorage.getItem("crm_theme") || "light";
+      if (t !== "dark" && t !== "light") t = "light";
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
   <style>
-    /* критичные стили — чтобы UI не «ломался», если /static не отдал CSS */
     .hidden { display: none !important; }
     body {
       margin: 0;
       min-height: 100vh;
-      color: #1f2937;
+      color: #37352f;
       background: #ffffff;
-      font-family: "Manrope", system-ui, sans-serif;
+      font-family: Inter, system-ui, sans-serif;
+    }
+    html[data-theme="dark"] body {
+      color: #ffffffcf;
+      background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=light-creator-1" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-1" />
 </head>
 <body>
   <header class="top">
-    <div class="brand">Team CRM <span>ops</span></div>
+    <div class="brand">Project Workflow</div>
     <nav class="nav-tabs" id="navTabs">
       <button type="button" data-view="home" class="active">Главная</button>
       <button type="button" data-view="board">Доска</button>
@@ -30,8 +40,12 @@
       <select id="projectFilter"><option value="">Все проекты</option></select>
       <button id="btnNewProject" type="button">+ Проект</button>
       <button id="btnNewManager" type="button">+ Менеджер</button>
-      <button id="btnLogin" type="button" class="ghost" title="Кто ты в CRM">Войти</button>
-      <button id="btnRename" type="button" class="ghost" title="Сменить имя в CRM">Имя</button>
+      <button id="btnTheme" type="button" class="theme-toggle" title="Тема">
+        <span class="theme-icon" id="themeIcon">☾</span>
+        <span id="themeLabel">Тёмная</span>
+      </button>
+      <button id="btnLogin" type="button" class="ghost" title="Кто ты в Project Workflow">Войти</button>
+      <button id="btnRename" type="button" class="ghost" title="Сменить имя">Имя</button>
       <button id="btnLogout" type="button" class="ghost" title="Выйти с сайта">Выйти</button>
       <span id="meLabel" class="me-label">не вошли</span>
     </div>
@@ -288,6 +302,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=light-creator-1"></script>
+  <script src="/static/app.js?v=pw-1"></script>
 </body>
 </html>

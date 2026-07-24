@@ -86,6 +86,22 @@ const state = {
 
 const $ = (s) => document.querySelector(s);
 
+function getTheme() {
+  const t = localStorage.getItem("pw_theme") || localStorage.getItem("crm_theme") || "light";
+  return t === "dark" ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("pw_theme", next);
+  localStorage.setItem("crm_theme", next);
+  const icon = $("#themeIcon");
+  const label = $("#themeLabel");
+  if (icon) icon.textContent = next === "dark" ? "☀" : "☾";
+  if (label) label.textContent = next === "dark" ? "Светлая" : "Тёмная";
+}
+
 async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   const pwd = localStorage.getItem("crm_password");
@@ -603,7 +619,7 @@ function renderBoard() {
     const colEl = document.createElement("section");
     colEl.className = `column ${col.id}`;
     const list = tasks.filter((t) => t.status === col.id);
-    colEl.innerHTML = `<h2>${col.title}<span>${list.length}</span></h2>`;
+    colEl.innerHTML = `<div class="col-head"><span class="col-badge">${col.title}</span><span class="col-count">${list.length}</span></div>`;
     const cards = document.createElement("div");
     cards.className = "cards";
     cards.dataset.status = col.id;
@@ -1041,7 +1057,7 @@ $("#btnLogin").addEventListener("click", async () => {
   if (!tid || !/^\d+$/.test(tid)) return;
   let emp = people().find((e) => String(e.telegram_id) === String(tid));
   if (!emp) {
-    const name = prompt("Тебя ещё нет в CRM. Как тебя зовут?");
+    const name = prompt("Тебя ещё нет в Project Workflow. Как тебя зовут?");
     if (!name) return;
     emp = await api("/api/employees", {
       method: "POST",
@@ -1052,7 +1068,7 @@ $("#btnLogin").addEventListener("click", async () => {
       }),
     });
   } else if (!emp.name || /^(владелец|owner)$/i.test(emp.name)) {
-    const name = prompt("Как тебя зовут в CRM?", "Ярослав");
+    const name = prompt("Как тебя зовут в Project Workflow?", "Ярослав");
     if (name && name.trim()) {
       emp = await api(`/api/employees/${emp.id}`, {
         method: "PATCH",
@@ -1071,7 +1087,7 @@ $("#btnRename").addEventListener("click", async () => {
     return;
   }
   const current = me()?.name || "";
-  const name = prompt("Как тебя зовут в CRM?", current || "Ярослав");
+  const name = prompt("Как тебя зовут в Project Workflow?", current || "Ярослав");
   if (!name || !name.trim()) return;
   try {
     await api(`/api/employees/${state.meId}`, {
@@ -1402,7 +1418,12 @@ $("#tplForm").addEventListener("submit", async (e) => {
   }
 });
 
+applyTheme(getTheme());
+$("#btnTheme")?.addEventListener("click", () => {
+  applyTheme(getTheme() === "dark" ? "light" : "dark");
+});
+
 load().catch((err) => {
   console.error(err);
-  alert("Не удалось загрузить CRM: " + err.message);
+  alert("Не удалось загрузить Project Workflow: " + err.message);
 });

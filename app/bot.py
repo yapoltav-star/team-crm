@@ -1126,7 +1126,7 @@ def build_dispatcher(
         if callback.message:
             await callback.message.answer(
                 f"Комментарий к задаче «{task_title}».\n"
-                "Напиши текст одним сообщением (или /cancel)."
+                "Напиши текстом или пришли голосовое (или /cancel)."
             )
 
     @dp.message(Command("cancel"))

@@ -1,1 +1,1 @@
-"""Team CRM application package."""
+"""Project Workflow application package."""

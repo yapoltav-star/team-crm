@@ -214,7 +214,7 @@ async def lifespan(app: FastAPI):
         await bot.session.close()
 
 
-app = FastAPI(title="team-crm", lifespan=lifespan)
+app = FastAPI(title="Project Workflow", lifespan=lifespan)
 app.include_router(api_router)
 
 PUBLIC_PATHS = {
