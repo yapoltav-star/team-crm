@@ -40,16 +40,21 @@ uvicorn app.main:app --reload --port 8000
 
 Бот и сайт крутятся одним сервисом.
 
-## Автозадачи по остаткам (WB Dashboard)
+## Автозадачи: наш склад (WB Dashboard)
 
-CRM раз в N минут читает `WB_DASHBOARD_URL/api/dashboard-data` и создаёт задачи
-на артикулы с покрытием ниже цели (как в разделе поставок дашборда).
+Пока смотрим только раздел **«Наш склад»** (не склады WB).
+
+Правило: остаток семьи на нашем складе ≤ `STOCK_OWN_MAX_STOCK` **и** по артикулу
+есть продажи (заказы/выкупы) → задача в CRM + Telegram.
 
 Variables:
 - `WB_DASHBOARD_URL`
 - `STOCK_WATCH_ENABLED=true`
-- `STOCK_MIN_RECOMMEND=5` — не создавать задачу, если рекомендовано поставить меньше
-- `STOCK_MAX_TASKS=10` — максимум новых задач за прогон
-- `STOCK_ASSIGNEE_TELEGRAM_ID` — кому (пусто/0 = владелец)
+- `STOCK_OWN_MAX_STOCK=0` — алерт при пустом складе (поставь `2`, если нужно «мало»)
+- `STOCK_MIN_ORDERS=5` / `STOCK_REQUIRE_BUYOUTS=true` — фильтр «есть продажи»
+- `STOCK_MAX_TASKS=10`
+- `STOCK_ASSIGNEE_TELEGRAM_ID` — кому (0 = владелец)
 
 Ручной запуск: `POST /api/stock-watch/run` (с `x-crm-password` если задан).
+
+Склады WB по регионам — позже отдельной задачей.

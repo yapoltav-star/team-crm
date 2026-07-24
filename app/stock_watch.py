@@ -1,10 +1,13 @@
-"""Автозадачи по критичным остаткам из WB Dashboard."""
+"""Автозадачи по остаткам на НАШЕМ складе (WB Dashboard → own-warehouse).
+
+Склады WB (поставки по регионам) — отдельная большая тема, пока выключены.
+"""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -19,113 +22,115 @@ from app.tasks_service import add_event, set_assignees
 
 logger = logging.getLogger("stock-watch")
 
-MARKER_PREFIX = "[auto:stock:"
+MARKER_PREFIX = "[auto:own-stock:"
 
 
 @dataclass
-class CriticalSku:
+class OwnCritical:
     vendor_code: str
-    nm_id: int | None
-    min_days: float
-    recommend: int
-    warehouses: int
+    name: str
+    stock: int
+    family_stock: int
+    family: list[str]
     ordered: int
     buyouts: int
+    family_key: str
 
 
-def _marker(vendor_code: str) -> str:
-    return f"{MARKER_PREFIX}{vendor_code}]"
+def _marker(family_key: str) -> str:
+    return f"{MARKER_PREFIX}{family_key}]"
 
 
-def analyze_supply(
-    payload: dict[str, Any],
-    *,
-    target_days: int | None = None,
-    min_recommend: int = 5,
-    min_orders: int = 5,
-    require_buyouts: bool = True,
-) -> tuple[int, list[CriticalSku]]:
-    """Критичные остатки только по артикулам с продажами (заказы/выкупы)."""
-    settings = payload.get("settings") or {}
-    target = int(target_days or settings.get("target_coverage_days") or 30)
-    rows = payload.get("supply_report") or []
-
-    by: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        vc = str(r.get("vendor_code") or r.get("nm_id") or "").strip()
+def _sales_by_vendor(supply_report: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = {}
+    for r in supply_report or []:
+        vc = str(r.get("vendor_code") or "").strip()
         if not vc:
             continue
-        if vc not in by:
-            by[vc] = {
-                "nm_id": r.get("nm_id"),
-                "planned": 0,
-                "raw_recommend": 0,
-                "min_days": None,
-                "wh": 0,
-                "ordered": 0,
-                "buyouts": 0,
-            }
-        if r.get("planned_supply_qty"):
-            by[vc]["planned"] = int(r["planned_supply_qty"] or 0)
-        period = int(r.get("period_days") or 0)
-        ordered = int(r.get("ordered_qty") or 0)
-        buyout = int(r.get("buyout_qty") or 0)
-        stock = int(r.get("current_stock") or 0)
-        by[vc]["ordered"] += ordered
-        by[vc]["buyouts"] += buyout
-        # скорость только там, где реально были заказы
-        if ordered <= 0 or period <= 0:
-            by[vc]["wh"] += 1
-            continue
-        daily = ordered / period
-        days = stock / daily
-        rec = max(0, round(daily * target - stock))
-        by[vc]["raw_recommend"] += rec
-        by[vc]["wh"] += 1
-        prev = by[vc]["min_days"]
-        by[vc]["min_days"] = days if prev is None else min(prev, days)
+        a = out.setdefault(vc, {"ordered": 0, "buyouts": 0})
+        a["ordered"] += int(r.get("ordered_qty") or 0)
+        a["buyouts"] += int(r.get("buyout_qty") or 0)
+    return out
 
-    critical: list[CriticalSku] = []
-    for vc, a in by.items():
-        ordered_total = int(a["ordered"] or 0)
-        buyout_total = int(a["buyouts"] or 0)
-        # без продаж / заказов — не трогаем
-        if ordered_total < max(1, min_orders):
+
+def analyze_own_warehouse(
+    own_payload: dict[str, Any],
+    dash_payload: dict[str, Any],
+    *,
+    min_orders: int = 5,
+    require_buyouts: bool = True,
+    max_family_stock: int = 0,
+) -> list[OwnCritical]:
+    """Критично: на нашем складе мало/пусто, но по артикулу есть продажи."""
+    sales = _sales_by_vendor(dash_payload.get("supply_report") or [])
+    by_vendor = own_payload.get("by_vendor") or {}
+    rows = own_payload.get("rows") or []
+    name_by_vc = {
+        str(r.get("vendor_code") or "").strip(): str(r.get("name") or r.get("model_name") or "")
+        for r in rows
+        if r.get("vendor_code")
+    }
+
+    # одна задача на семью артикулов (общий остаток)
+    best: dict[str, OwnCritical] = {}
+    for vc, meta in by_vendor.items():
+        vc = str(vc or "").strip()
+        if not vc:
             continue
-        if require_buyouts and buyout_total < 1:
+        sal = sales.get(vc) or {"ordered": 0, "buyouts": 0}
+        ordered = int(sal["ordered"])
+        buyouts = int(sal["buyouts"])
+        if ordered < max(1, min_orders):
             continue
-        total = max(0, int(a["raw_recommend"]) - int(a["planned"] or 0))
-        min_days = a["min_days"]
-        if total < min_recommend:
+        if require_buyouts and buyouts < 1:
             continue
-        if min_days is None or min_days >= target:
+
+        stock = int(meta.get("stock") or 0)
+        family_stock = meta.get("family_stock")
+        if family_stock is None:
+            family_stock = stock
+        family_stock = int(family_stock or 0)
+        if family_stock > max_family_stock:
             continue
-        critical.append(
-            CriticalSku(
-                vendor_code=vc,
-                nm_id=int(a["nm_id"]) if a.get("nm_id") else None,
-                min_days=float(min_days),
-                recommend=total,
-                warehouses=int(a["wh"]),
-                ordered=ordered_total,
-                buyouts=buyout_total,
-            )
+
+        family = [str(x) for x in (meta.get("family") or [vc]) if x]
+        if vc not in family:
+            family = [vc, *family]
+        family_key = "|".join(sorted(set(family)))
+        # суммарные продажи по семье — чтобы выбрать «главный» артикул
+        fam_orders = sum(int((sales.get(m) or {}).get("ordered") or 0) for m in family)
+        fam_buy = sum(int((sales.get(m) or {}).get("buyouts") or 0) for m in family)
+        item = OwnCritical(
+            vendor_code=vc,
+            name=name_by_vc.get(vc) or "",
+            stock=stock,
+            family_stock=family_stock,
+            family=sorted(set(family)),
+            ordered=fam_orders or ordered,
+            buyouts=fam_buy or buyouts,
+            family_key=family_key,
         )
-    critical.sort(key=lambda x: (x.min_days, -x.recommend, -x.ordered))
-    return target, critical
+        prev = best.get(family_key)
+        if prev is None or item.ordered > prev.ordered:
+            best[family_key] = item
+
+    critical = list(best.values())
+    critical.sort(key=lambda x: (x.family_stock, -x.ordered, x.vendor_code))
+    return critical
 
 
-async def fetch_dashboard(url: str) -> dict[str, Any]:
-    base = url.rstrip("/")
-    endpoint = f"{base}/api/dashboard-data"
+async def fetch_json(url: str) -> dict[str, Any]:
     timeout = aiohttp.ClientTimeout(total=60)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(endpoint) as resp:
+        async with session.get(url) as resp:
             resp.raise_for_status()
-            return await resp.json()
+            data = await resp.json()
+            if not isinstance(data, dict):
+                raise ValueError(f"expected object from {url}")
+            return data
 
 
-async def _open_stock_markers(session: AsyncSession) -> set[str]:
+async def _open_markers(session: AsyncSession) -> set[str]:
     tasks = (
         await session.scalars(
             select(Task).where(Task.active.is_(True), Task.status != "done")
@@ -133,12 +138,9 @@ async def _open_stock_markers(session: AsyncSession) -> set[str]:
     ).all()
     out: set[str] = set()
     for t in tasks:
-        desc = t.description or ""
-        arts = t.articles or ""
-        blob = f"{desc}\n{arts}"
+        blob = f"{t.description or ''}\n{t.articles or ''}"
         if MARKER_PREFIX not in blob:
             continue
-        # вытащим vendor из маркера
         start = blob.find(MARKER_PREFIX)
         end = blob.find("]", start)
         if end > start:
@@ -157,18 +159,23 @@ async def run_stock_watch(
     if not settings.wb_dashboard_url:
         return {"ok": False, "error": "WB_DASHBOARD_URL пуст"}
 
+    base = settings.wb_dashboard_url.rstrip("/")
     try:
-        payload = await fetch_dashboard(settings.wb_dashboard_url)
+        own = await fetch_json(f"{base}/api/own-warehouse-stock")
+        dash = await fetch_json(f"{base}/api/dashboard-data")
     except Exception as exc:  # noqa: BLE001
         logger.exception("dashboard fetch failed")
         return {"ok": False, "error": f"dashboard: {exc}"}
 
-    target, critical = analyze_supply(
-        payload,
-        target_days=settings.stock_target_days or None,
-        min_recommend=settings.stock_min_recommend,
+    if own.get("error"):
+        return {"ok": False, "error": f"own-warehouse: {own.get('error')}"}
+
+    critical = analyze_own_warehouse(
+        own,
+        dash,
         min_orders=settings.stock_min_orders,
         require_buyouts=settings.stock_require_buyouts,
+        max_family_stock=settings.stock_own_max_stock,
     )
     top = critical[: max(1, settings.stock_max_tasks)]
 
@@ -199,41 +206,45 @@ async def run_stock_watch(
             if emp:
                 assignee = emp
 
-        existing = await _open_stock_markers(session)
+        existing = await _open_markers(session)
         today = datetime.now(settings.tz).date()
 
         for sku in top:
-            marker = _marker(sku.vendor_code)
+            marker = _marker(sku.family_key)
             if marker in existing:
                 skipped_existing += 1
                 continue
+
+            fam = ", ".join(sku.family[:6])
+            if len(sku.family) > 6:
+                fam += f" (+{len(sku.family) - 6})"
             title = (
-                f"Остатки: дозаказать {sku.vendor_code} "
-                f"(~{sku.recommend} шт, ~{sku.min_days:.0f} дн.)"
+                f"Наш склад: {sku.family_stock} шт — {sku.vendor_code} "
+                f"(заказы {sku.ordered})"
             )
             desc = (
                 f"{marker}\n"
-                f"Автозадача из WB Dashboard.\n"
+                f"Автозадача: остаток на НАШЕМ складе.\n"
                 f"Артикул: {sku.vendor_code}\n"
-                f"nm_id: {sku.nm_id or '—'}\n"
+                f"Название: {sku.name or '—'}\n"
+                f"Остаток артикула: {sku.stock} шт\n"
+                f"Остаток семьи (общий): {sku.family_stock} шт\n"
+                f"Семья: {fam}\n"
                 f"Заказы за период: {sku.ordered}, выкупы: {sku.buyouts}\n"
-                f"Мин. покрытие по складам: ~{sku.min_days:.1f} дн. "
-                f"(цель {target} дн.)\n"
-                f"Рекомендуется поставить: ~{sku.recommend} шт.\n"
-                f"Складов в отчёте: {sku.warehouses}\n"
-                f"Источник: {settings.wb_dashboard_url.rstrip('/')}/"
+                f"Срез склада: {own.get('as_of') or '—'}\n"
+                f"Источник: {base}/ (раздел «Наш склад»)"
             )
             task = Task(
                 title=title[:500],
                 description=desc,
-                articles=sku.vendor_code[:500],
+                articles=(sku.vendor_code[:500]),
                 assignee_id=assignee.id,
                 created_by_id=owner.id,
                 status="todo",
                 kind="once",
                 notify_time=datetime.now(settings.tz).strftime("%H:%M"),
                 due_date=today + timedelta(days=1),
-                priority="high" if sku.min_days < 3 else "normal",
+                priority="high" if sku.family_stock <= 0 else "normal",
                 created_at=datetime.utcnow(),
             )
             session.add(task)
@@ -244,7 +255,7 @@ async def run_stock_watch(
             await add_event(
                 session,
                 task.id,
-                f"Авто: критичные остатки — {sku.vendor_code}",
+                f"Авто: наш склад — {sku.vendor_code}",
                 kind="created",
                 actor_id=owner.id,
             )
@@ -272,21 +283,21 @@ async def run_stock_watch(
                 {
                     "id": task.id,
                     "vendor_code": sku.vendor_code,
-                    "recommend": sku.recommend,
-                    "min_days": round(sku.min_days, 1),
+                    "family_stock": sku.family_stock,
+                    "ordered": sku.ordered,
                     "notified": notified,
                     "notify_error": nerr,
                 }
             )
             existing.add(marker)
 
-        # сводка владельцу, если что-то нашли
         if critical and bot:
             lines = [
-                f"📦 Остатки WB: критично <b>{len(critical)}</b> арт. "
-                f"с продажами (заказы ≥{settings.stock_min_orders}"
-                f"{', есть выкупы' if settings.stock_require_buyouts else ''}; "
-                f"поставить ≥{settings.stock_min_recommend})",
+                f"🏭 <b>Наш склад</b>: критично <b>{len(critical)}</b> "
+                f"(остаток семьи ≤{settings.stock_own_max_stock}, "
+                f"заказы ≥{settings.stock_min_orders}"
+                f"{', есть выкупы' if settings.stock_require_buyouts else ''})",
+                f"Срез: {own.get('as_of') or '—'}",
                 f"Создано задач: <b>{len(created)}</b>, уже были: {skipped_existing}",
                 "",
                 "Топ:",
@@ -294,8 +305,7 @@ async def run_stock_watch(
             for sku in critical[:8]:
                 lines.append(
                     f"• <code>{sku.vendor_code}</code> — "
-                    f"~{sku.min_days:.0f} дн., поставить ~{sku.recommend}, "
-                    f"заказы {sku.ordered}"
+                    f"склад {sku.family_stock} шт, заказы {sku.ordered}"
                 )
             try:
                 await bot.send_message(
@@ -304,11 +314,12 @@ async def run_stock_watch(
                     parse_mode="HTML",
                 )
             except Exception:  # noqa: BLE001
-                logger.exception("stock digest notify failed")
+                logger.exception("own-stock digest notify failed")
 
     return {
         "ok": True,
-        "target_days": target,
+        "mode": "own_warehouse",
+        "as_of": own.get("as_of"),
         "critical_total": len(critical),
         "created": created,
         "skipped_existing": skipped_existing,

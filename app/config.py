@@ -23,19 +23,18 @@ class Settings(BaseSettings):
     # устаревший авто-вход без одобрения (по умолчанию выкл — заявка владельцу)
     allow_self_join: bool = Field(default=False, alias="ALLOW_SELF_JOIN")
 
-    # Связка с WB Dashboard (остатки → автозадачи)
+    # Связка с WB Dashboard — пока только «Наш склад»
     wb_dashboard_url: str = Field(
         default="https://wb-dashboard-production-baf4.up.railway.app",
         alias="WB_DASHBOARD_URL",
     )
     stock_watch_enabled: bool = Field(default=True, alias="STOCK_WATCH_ENABLED")
     stock_watch_interval_minutes: int = Field(default=180, alias="STOCK_WATCH_INTERVAL_MINUTES")
-    # 0 = брать target_coverage_days из дашборда
-    stock_target_days: int = Field(default=0, alias="STOCK_TARGET_DAYS")
-    stock_min_recommend: int = Field(default=5, alias="STOCK_MIN_RECOMMEND")
+    # алерт если остаток семьи на нашем складе ≤ этого числа (0 = пусто)
+    stock_own_max_stock: int = Field(default=0, alias="STOCK_OWN_MAX_STOCK")
     # минимум заказов за период — без продаж задачи не создаём
     stock_min_orders: int = Field(default=5, alias="STOCK_MIN_ORDERS")
-    # требовать хотя бы 1 выкуп (реальная продажа, не только заказ)
+    # требовать хотя бы 1 выкуп
     stock_require_buyouts: bool = Field(default=True, alias="STOCK_REQUIRE_BUYOUTS")
     stock_max_tasks: int = Field(default=10, alias="STOCK_MAX_TASKS")
     # кому ставить задачи; 0 = владельцу
