@@ -32,6 +32,46 @@ const JOB_TITLES = [
 
 const JOB_TITLE_ORDER = Object.fromEntries(JOB_TITLES.map((t, i) => [t, i]));
 
+const PROJECT_COLORS = [
+  "#2563eb",
+  "#059669",
+  "#d97706",
+  "#dc2626",
+  "#7c3aed",
+  "#db2777",
+  "#0891b2",
+  "#65a30d",
+  "#ea580c",
+  "#4f46e5",
+];
+
+function projectColor(name) {
+  const key = String(name || "Без проекта").trim() || "Без проекта";
+  if (key === "Владелец") return "#64748b";
+  if (key === "Без проекта") return "#94a3b8";
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 33 + key.charCodeAt(i)) >>> 0;
+  return PROJECT_COLORS[h % PROJECT_COLORS.length];
+}
+
+function taskProjectName(t) {
+  if (t.assignees?.length) {
+    for (const a of t.assignees) {
+      if (a.team_group) return String(a.team_group).trim();
+    }
+  }
+  const ids = taskAssigneeIds(t);
+  for (const id of ids) {
+    const emp = people().find((e) => e.id === id);
+    if (emp?.team_group) return String(emp.team_group).trim();
+  }
+  if (t.created_by_id) {
+    const author = people().find((e) => e.id === t.created_by_id);
+    if (author?.team_group) return String(author.team_group).trim();
+  }
+  return "Без проекта";
+}
+
 const state = {
   view: localStorage.getItem("crm_view") || "home",
   board: null,
@@ -315,6 +355,9 @@ function renderPeople() {
     wrap.className =
       "people-project" +
       (state.selectedProject === projectName && !state.selectedPersonId ? " active" : "");
+    const color = projectColor(projectName);
+    wrap.style.setProperty("--project-color", color);
+    wrap.style.borderLeftColor = color;
 
     const head = document.createElement("div");
     head.className = "people-project-head";
@@ -517,6 +560,11 @@ function cardHtml(t) {
   `;
 }
 
+function paintCard(el, t) {
+  const color = projectColor(taskProjectName(t));
+  el.style.setProperty("--project-color", color);
+}
+
 function bindCard(card, t) {
   card.querySelector(".btn-edit").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -583,6 +631,7 @@ function renderBoard() {
       card.draggable = true;
       card.dataset.id = t.id;
       card.innerHTML = cardHtml(t);
+      paintCard(card, t);
       bindCard(card, t);
       cards.appendChild(card);
     }
@@ -620,6 +669,7 @@ function renderHome() {
         const card = document.createElement("article");
         card.className = `card home-card due-${t.due_flag || "none"}`;
         card.innerHTML = cardHtml(t);
+        paintCard(card, t);
         card.querySelector(".card-actions")?.remove();
         card.addEventListener("click", () => openTaskDialog(t.id));
         list.appendChild(card);

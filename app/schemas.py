@@ -68,6 +68,8 @@ class ArticleOut(BaseModel):
 class AssigneeOut(BaseModel):
     id: int
     name: str
+    team_group: str = ""
+    job_title: str = ""
 
 
 class CommentIn(BaseModel):

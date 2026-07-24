@@ -1,20 +1,20 @@
 @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap");
 
 :root {
-  --bg: #141210;
-  --bg-glow: #2a2118;
-  --panel: #1c1916;
-  --line: #3a342e;
-  --text: #f3ebe1;
-  --muted: #a89988;
-  --accent: #e8a45c;
-  --accent-dim: #c4843d;
-  --todo: #6b635a;
+  --bg: #ffffff;
+  --bg-glow: #f3f4f6;
+  --panel: #ffffff;
+  --line: #e5e7eb;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-dim: #1d4ed8;
+  --todo: #9ca3af;
   --doing: #d97706;
-  --done: #3d8b6e;
-  --card: #221e1a;
-  --sku: #fbbf24;
-  --sku-bg: rgba(251, 191, 36, 0.12);
+  --done: #059669;
+  --card: #ffffff;
+  --sku: #b45309;
+  --sku-bg: rgba(245, 158, 11, 0.12);
   font-family: "Manrope", system-ui, sans-serif;
 }
 
@@ -24,10 +24,7 @@ body {
   margin: 0;
   min-height: 100vh;
   color: var(--text);
-  background:
-    radial-gradient(900px 480px at 0% 0%, var(--bg-glow), transparent 55%),
-    radial-gradient(700px 400px at 100% 100%, #1a2420, transparent 50%),
-    var(--bg);
+  background: var(--bg);
 }
 
 .top {
@@ -39,7 +36,7 @@ body {
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  background: rgba(20, 18, 16, 0.88);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(10px);
   z-index: 10;
 }
@@ -100,7 +97,7 @@ button.ghost {
 
 .people {
   border-right: 1px solid var(--line);
-  background: rgba(28, 25, 22, 0.85);
+  background: #f8fafc;
   padding: 1rem 0.85rem;
   overflow: auto;
 }
@@ -138,13 +135,14 @@ button.ghost {
 .people-project {
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: rgba(0, 0, 0, 0.18);
+  background: #fff;
   padding: 0.45rem 0.4rem 0.55rem;
+  border-left-width: 4px;
+  border-left-style: solid;
 }
 
 .people-project.active {
-  border-color: rgba(232, 164, 92, 0.55);
-  box-shadow: inset 0 0 0 1px rgba(232, 164, 92, 0.2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--project-color, var(--accent)) 35%, transparent);
 }
 
 .people-project-head {
@@ -173,7 +171,7 @@ button.ghost {
 }
 
 .people-project-title:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.04);
   filter: none;
 }
 
@@ -194,7 +192,7 @@ button.ghost {
   font-size: 0.66rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #c4a882;
+  color: var(--muted);
   font-weight: 700;
   padding: 0.2rem 0.45rem 0.15rem;
 }
@@ -254,13 +252,13 @@ button.ghost {
 }
 
 .person:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(0, 0, 0, 0.03);
   filter: none;
 }
 
 .person.active {
-  background: rgba(232, 164, 92, 0.1);
-  border-color: rgba(232, 164, 92, 0.45);
+  background: color-mix(in srgb, var(--accent) 12%, white);
+  border-color: color-mix(in srgb, var(--accent) 40%, white);
 }
 
 .person-name {
@@ -282,7 +280,7 @@ button.ghost {
 .person-count {
   min-width: 1.55rem;
   text-align: center;
-  background: #2a2520;
+  background: #f3f4f6;
   border-radius: 999px;
   font-size: 0.78rem;
   color: var(--accent);
@@ -370,7 +368,7 @@ button.ghost {
 }
 
 .column {
-  background: rgba(28, 25, 22, 0.72);
+  background: #f8fafc;
   border: 1px solid var(--line);
   border-radius: 14px;
   min-height: 55vh;
@@ -417,6 +415,10 @@ button.ghost {
   overflow: hidden;
   min-width: 0;
   max-width: 100%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  border-left-width: 4px;
+  border-left-style: solid;
+  border-left-color: var(--project-color, var(--line));
 }
 
 .card:hover {
@@ -479,7 +481,7 @@ button.ghost {
   padding: 0.18rem 0.4rem;
   font-size: 0.72rem;
   font-weight: 700;
-  background: #2a2520;
+  background: #f3f4f6;
   border: 1px solid var(--line);
   color: var(--muted);
   border-radius: 7px;
@@ -509,7 +511,7 @@ button.danger { color: #f0a8a8; }
 .chip {
   font-size: 0.72rem;
   color: var(--muted);
-  background: #2a2520;
+  background: #f3f4f6;
   border-radius: 999px;
   padding: 0.18rem 0.5rem;
   font-weight: 600;
@@ -517,8 +519,8 @@ button.danger { color: #f0a8a8; }
   overflow-wrap: anywhere;
 }
 
-.chip.project { color: #e8c9a0; }
-.chip.assignee { color: #d6c4b0; }
+.chip.project { color: #1d4ed8; }
+.chip.assignee { color: #047857; }
 
 .desc {
   color: var(--muted);
@@ -600,7 +602,7 @@ dialog.drawer #dlgForm > menu {
 .nav-tabs {
   display: flex;
   gap: 0.25rem;
-  background: #1c1916;
+  background: #f3f4f6;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 0.2rem;
@@ -616,8 +618,9 @@ dialog.drawer #dlgForm > menu {
 }
 
 .nav-tabs button.active {
-  background: rgba(232, 164, 92, 0.16);
+  background: #fff;
   color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 .nav-tabs button:hover { filter: none; color: var(--text); }
@@ -649,7 +652,7 @@ dialog.drawer #dlgForm > menu {
 }
 
 .home-section {
-  background: rgba(28, 25, 22, 0.72);
+  background: #f8fafc;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0.85rem;
@@ -721,9 +724,9 @@ dialog.drawer #dlgForm > menu {
   justify-content: center;
   font-size: 0.62rem;
   font-weight: 800;
-  background: #3a322a;
-  color: #f0d6b4;
-  border: 1px solid #5a4c3e;
+  background: #e5e7eb;
+  color: #374151;
+  border: 1px solid #d1d5db;
 }
 
 .avatar.mini {
@@ -792,7 +795,7 @@ dialog.drawer[open] {
 .drawer-side {
   border-left: 1px solid var(--line);
   padding: 1rem;
-  background: rgba(0, 0, 0, 0.15);
+  background: #f8fafc;
 }
 
 .drawer form > menu {
@@ -851,7 +854,7 @@ body.dlg-open {
 .dates-box {
   display: grid;
   gap: 0.35rem;
-  background: #1a1714;
+  background: #f8fafc;
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.65rem 0.75rem;
@@ -877,13 +880,14 @@ body.dlg-open {
   max-height: 220px;
   overflow: auto;
   padding: 0.55rem;
-  background: #1a1714;
+  background: #f8fafc;
   border: 1px solid var(--line);
   border-radius: 10px;
 }
 
 .chat-msg {
-  background: #26211c;
+  background: #fff;
+  border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.55rem 0.65rem;
 }

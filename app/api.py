@@ -99,15 +99,40 @@ def _task_matches_subjects(task: Task, subject_ids: set[int]) -> bool:
     return False
 
 
+def _task_visible_to(
+    task: Task, viewer: Employee, subject_ids: set[int] | None
+) -> bool:
+    """Владелец — всё; иначе свои назначения/доступы + всё, что сам поставил."""
+    if subject_ids is None:
+        return True
+    if task.created_by_id == viewer.id:
+        return True
+    return _task_matches_subjects(task, subject_ids)
+
+
 def _assignees_out(task: Task) -> list[AssigneeOut]:
     out: list[AssigneeOut] = []
     seen: set[int] = set()
     for link in task.assignees or []:
         if link.employee and link.employee_id not in seen:
             seen.add(link.employee_id)
-            out.append(AssigneeOut(id=link.employee.id, name=link.employee.name))
+            out.append(
+                AssigneeOut(
+                    id=link.employee.id,
+                    name=link.employee.name,
+                    team_group=link.employee.team_group or "",
+                    job_title=link.employee.job_title or "",
+                )
+            )
     if not out and task.assignee:
-        out.append(AssigneeOut(id=task.assignee.id, name=task.assignee.name))
+        out.append(
+            AssigneeOut(
+                id=task.assignee.id,
+                name=task.assignee.name,
+                team_group=task.assignee.team_group or "",
+                job_title=task.assignee.job_title or "",
+            )
+        )
     return out
 
 
@@ -233,7 +258,7 @@ async def board(
         )
     ).all()
     if subject_ids is not None:
-        tasks = [t for t in tasks if _task_matches_subjects(t, subject_ids)]
+        tasks = [t for t in tasks if _task_visible_to(t, viewer, subject_ids)]
 
     emp_source = all_employees if viewer.role == "owner" else visible_employees
     emp_outs = [await _employee_out(session, e) for e in emp_source]
@@ -272,10 +297,10 @@ async def home(
     ).all()
 
     if subject_ids is None:
-        mine_ids = {viewer.id}
-        mine_tasks = [t for t in tasks if _task_matches_subjects(t, mine_ids)]
+        # владелец на главной — свои назначения + поставленные им
+        mine_tasks = [t for t in tasks if _task_visible_to(t, viewer, {viewer.id})]
     else:
-        mine_tasks = [t for t in tasks if _task_matches_subjects(t, subject_ids)]
+        mine_tasks = [t for t in tasks if _task_visible_to(t, viewer, subject_ids)]
 
     return HomeOut(
         new=[_task_out(t, today=today) for t in mine_tasks if t.status == "todo"],
@@ -451,7 +476,7 @@ async def get_task(
         if not viewer or not viewer.active:
             raise HTTPException(404, "Employee not found")
         subject_ids = await _visible_subject_ids(session, viewer)
-        if subject_ids is not None and not _task_matches_subjects(task, subject_ids):
+        if subject_ids is not None and not _task_visible_to(task, viewer, subject_ids):
             raise HTTPException(403, "Нет доступа к этой задаче")
     return _task_out(task, today=today, with_thread=True)
 
@@ -683,7 +708,7 @@ async def archive_list(
             raise HTTPException(404, "Employee not found")
         subject_ids = await _visible_subject_ids(session, viewer)
         if subject_ids is not None:
-            tasks = [t for t in tasks if _task_matches_subjects(t, subject_ids)]
+            tasks = [t for t in tasks if _task_visible_to(t, viewer, subject_ids)]
     elif viewer_id is None:
         tasks = []
     return [_task_out(t, today=today) for t in tasks]
