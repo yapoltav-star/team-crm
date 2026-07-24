@@ -38,13 +38,11 @@ async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   const pwd = localStorage.getItem("crm_password");
   if (pwd) headers["x-crm-password"] = pwd;
-  const res = await fetch(path, { ...opts, headers });
+  const res = await fetch(path, { ...opts, headers, credentials: "same-origin" });
   if (res.status === 401) {
-    const entered = prompt("Пароль к CRM (WEB_PASSWORD):");
-    if (entered) {
-      localStorage.setItem("crm_password", entered);
-      return api(path, opts);
-    }
+    localStorage.removeItem("crm_password");
+    location.href = "/login";
+    throw new Error("Unauthorized");
   }
   if (!res.ok) throw new Error(await res.text());
   if (res.status === 204) return null;
@@ -628,6 +626,16 @@ $("#projectFilter").addEventListener("change", () => {
 $("#btnAllPeople").addEventListener("click", () => {
   state.selectedPersonId = null;
   renderBoardView();
+});
+
+$("#btnLogout").addEventListener("click", async () => {
+  try {
+    await api("/api/auth/logout", { method: "POST", body: "{}" });
+  } catch (_) {
+    /* ignore */
+  }
+  localStorage.removeItem("crm_password");
+  location.href = "/login";
 });
 
 $("#btnLogin").addEventListener("click", async () => {

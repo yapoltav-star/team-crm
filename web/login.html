@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Team CRM — вход</title>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&display=swap");
+    :root {
+      --bg: #141210;
+      --panel: #1c1916;
+      --line: #3a342e;
+      --text: #f3ebe1;
+      --muted: #a89988;
+      --accent: #e8a45c;
+      --accent-dim: #c4843d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: Manrope, system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(700px 400px at 20% 0%, #2a2118, transparent 55%),
+        var(--bg);
+      padding: 1.25rem;
+    }
+    .card {
+      width: min(400px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 1.4rem 1.35rem 1.25rem;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+    h1 span { color: var(--accent); font-size: 0.75rem; margin-left: 0.4rem; }
+    p {
+      margin: 0.45rem 0 1.1rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }
+    label {
+      display: grid;
+      gap: 0.35rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    input {
+      font: inherit;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #141210;
+      color: var(--text);
+      padding: 0.7rem 0.8rem;
+    }
+    button {
+      margin-top: 0.9rem;
+      width: 100%;
+      font: inherit;
+      font-weight: 800;
+      border: none;
+      border-radius: 10px;
+      padding: 0.75rem;
+      cursor: pointer;
+      color: #1a1208;
+      background: linear-gradient(180deg, var(--accent), var(--accent-dim));
+    }
+    .err {
+      display: none;
+      margin-top: 0.75rem;
+      color: #f0a8a8;
+      font-size: 0.88rem;
+      font-weight: 600;
+    }
+    .err.show { display: block; }
+  </style>
+</head>
+<body>
+  <form class="card" id="loginForm">
+    <h1>Team CRM <span>ops</span></h1>
+    <p>Доступ только для команды. Введи пароль сайта.</p>
+    <label>Пароль
+      <input type="password" name="password" id="password" required autocomplete="current-password" autofocus />
+    </label>
+    <button type="submit">Войти</button>
+    <div class="err" id="err">Неверный пароль</div>
+  </form>
+  <script>
+    const form = document.getElementById("loginForm");
+    const err = document.getElementById("err");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.classList.remove("show");
+      const password = document.getElementById("password").value;
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password }),
+        });
+        if (!res.ok) {
+          err.classList.add("show");
+          return;
+        }
+        localStorage.setItem("crm_password", password);
+        location.href = "/";
+      } catch (_) {
+        err.textContent = "Нет связи с сервером";
+        err.classList.add("show");
+      }
+    });
+  </script>
+</body>
+</html>

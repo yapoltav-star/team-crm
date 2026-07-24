@@ -7,10 +7,12 @@ from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from app.api import router as api_router
+from app.auth import password_ok, request_password
 from app.bot import build_dispatcher, materialize_and_notify
 from app.config import get_settings
 from app.db import SessionLocal, init_db
@@ -36,6 +38,15 @@ async def lifespan(app: FastAPI):
         logger.warning(msg)
     else:
         logger.info("DB backend: %s", settings.db_backend)
+    if settings.on_railway and not str(settings.web_password or "").strip():
+        msg = (
+            "WEB_PASSWORD не задан. На Railway сайт будет открыт всем. "
+            "Задай WEB_PASSWORD в Variables."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+    if not str(settings.web_password or "").strip():
+        logger.warning("WEB_PASSWORD пуст — веб без пароля (только для локалки)")
     await init_db()
     scheduler = AsyncIOScheduler(timezone=settings.tz_name)
     bot = None
@@ -137,44 +148,79 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="team-crm", lifespan=lifespan)
 app.include_router(api_router)
 
+PUBLIC_PATHS = {
+    "/health",
+    "/login",
+    "/api/auth/login",
+}
+
+
+class LoginIn(BaseModel):
+    password: str
+
 
 @app.middleware("http")
-async def simple_password(request: Request, call_next):
+async def site_password_gate(request: Request, call_next):
     settings = get_settings()
-    if settings.web_password and request.url.path.startswith("/api"):
-        pwd = request.headers.get("x-crm-password") or request.query_params.get("password")
-        if pwd != settings.web_password:
-            # HTTPException in middleware becomes 500 — return Response explicitly
+    path = request.url.path
+    if path in PUBLIC_PATHS:
+        return await call_next(request)
+    if not str(settings.web_password or "").strip():
+        return await call_next(request)
+
+    if password_ok(settings, request_password(request)):
+        return await call_next(request)
+
+    accept = (request.headers.get("accept") or "").lower()
+    is_api = path.startswith("/api")
+    if not is_api and ("text/html" in accept or path == "/" or path.startswith("/static")):
+        # для статики после редиректа на login — просто 401/redirect
+        if path.startswith("/static"):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    return await call_next(request)
+        return RedirectResponse(url="/login", status_code=302)
+    return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: LoginIn):
+    settings = get_settings()
+    if not password_ok(settings, body.password):
+        return JSONResponse({"detail": "Неверный пароль"}, status_code=401)
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(
+        key="crm_password",
+        value=body.password.strip(),
+        httponly=True,
+        samesite="lax",
+        secure=bool(settings.on_railway),
+        max_age=60 * 60 * 24 * 30,
+        path="/",
+    )
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("crm_password", path="/")
+    return resp
 
 
 @app.get("/health")
-async def health(request: Request) -> dict:
+async def health() -> dict:
     settings = get_settings()
-    last = getattr(request.app.state, "last_stock_watch", None)
-    # короткий итог без огромного списка
-    last_summary = None
-    if isinstance(last, dict):
-        last_summary = {
-            "ok": last.get("ok"),
-            "error": last.get("error"),
-            "critical_total": last.get("critical_total"),
-            "created": len(last.get("created") or []),
-            "skipped_existing": last.get("skipped_existing"),
-            "as_of": last.get("as_of"),
-            "mode": last.get("mode"),
-        }
     return {
         "ok": True,
-        "build": "stock-mwf-cooldown-2026-07-24",
+        "build": "security-gate-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
-        "stock_watch": settings.stock_watch_enabled,
-        "stock_schedule": f"{settings.stock_watch_days} @ {settings.stock_watch_time}",
-        "stock_cooldown_days": settings.stock_cooldown_days,
-        "stock_last": last_summary,
+        "auth": bool(str(settings.web_password or "").strip()),
     }
+
+
+@app.get("/login")
+async def login_page() -> FileResponse:
+    return FileResponse(WEB_ROOT / "login.html")
 
 
 @app.get("/")
