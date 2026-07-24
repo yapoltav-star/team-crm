@@ -40,17 +40,17 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler(timezone=settings.tz_name)
     bot = None
     poll_task = None
-
     dp = None
+
     if settings.bot_enabled:
         bot, dp = build_dispatcher(settings, SessionLocal)
 
         async def tick() -> None:
             await materialize_and_notify(SessionLocal, bot, settings)
 
-        scheduler.add_job(tick, "interval", minutes=1, id="crm_tick", replace_existing=True, max_instances=1)
-        scheduler.start()
-        await tick()
+        scheduler.add_job(
+            tick, "interval", minutes=1, id="crm_tick", replace_existing=True, max_instances=1
+        )
         # снять webhook и чужой polling-хвост перед стартом
         try:
             await bot.delete_webhook(drop_pending_updates=False)
@@ -59,9 +59,50 @@ async def lifespan(app: FastAPI):
         poll_task = asyncio.create_task(
             dp.start_polling(bot, handle_signals=False, allowed_updates=dp.resolve_used_update_types())
         )
-        logger.info("Telegram bot + scheduler started")
+        logger.info("Telegram bot started")
     else:
         logger.warning("Bot disabled: set TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_ID")
+
+    if settings.stock_watch_enabled and settings.wb_dashboard_url:
+        from app.stock_watch import run_stock_watch
+
+        async def stock_tick() -> None:
+            result = await run_stock_watch(
+                session_factory=SessionLocal,
+                settings=settings,
+                bot=bot,
+            )
+            logger.info("stock_watch: %s", result)
+
+        scheduler.add_job(
+            stock_tick,
+            "interval",
+            minutes=max(30, int(settings.stock_watch_interval_minutes or 180)),
+            id="stock_watch",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info(
+            "Stock watch enabled → %s every %sm",
+            settings.wb_dashboard_url,
+            settings.stock_watch_interval_minutes,
+        )
+
+    scheduler.start()
+    if settings.bot_enabled and bot is not None:
+        await materialize_and_notify(SessionLocal, bot, settings)
+    if settings.stock_watch_enabled and settings.wb_dashboard_url:
+        from app.stock_watch import run_stock_watch
+
+        try:
+            logger.info(
+                "stock_watch first run: %s",
+                await run_stock_watch(
+                    session_factory=SessionLocal, settings=settings, bot=bot
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("stock_watch first run failed")
 
     app.state.bot = bot
     app.state.scheduler = scheduler
@@ -105,9 +146,10 @@ async def health() -> dict:
     settings = get_settings()
     return {
         "ok": True,
-        "build": "notify-all-2026-07-24",
+        "build": "stock-watch-2026-07-24",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
+        "stock_watch": settings.stock_watch_enabled,
     }
 
 

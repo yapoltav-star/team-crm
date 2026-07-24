@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.catalog import load_catalog
 from app.config import get_settings
-from app.db import get_session
+from app.db import SessionLocal, get_session
 from app.models import Employee, Project, Task, TaskAssignee, TaskComment, TaskTemplate
 from app.notify import notify_task_assignee
 from app.schemas import (
@@ -546,3 +546,17 @@ async def delete_template(
     await session.delete(t)
     await session.commit()
     return {"ok": True}
+
+
+@router.post("/stock-watch/run")
+async def stock_watch_run(request: Request) -> dict:
+    """Ручной запуск проверки остатков → автозадачи."""
+    from app.stock_watch import run_stock_watch
+
+    settings = get_settings()
+    bot = getattr(request.app.state, "bot", None)
+    return await run_stock_watch(
+        session_factory=SessionLocal,
+        settings=settings,
+        bot=bot,
+    )

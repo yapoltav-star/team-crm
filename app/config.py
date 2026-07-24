@@ -23,12 +23,27 @@ class Settings(BaseSettings):
     # устаревший авто-вход без одобрения (по умолчанию выкл — заявка владельцу)
     allow_self_join: bool = Field(default=False, alias="ALLOW_SELF_JOIN")
 
+    # Связка с WB Dashboard (остатки → автозадачи)
+    wb_dashboard_url: str = Field(
+        default="https://wb-dashboard-production-baf4.up.railway.app",
+        alias="WB_DASHBOARD_URL",
+    )
+    stock_watch_enabled: bool = Field(default=True, alias="STOCK_WATCH_ENABLED")
+    stock_watch_interval_minutes: int = Field(default=180, alias="STOCK_WATCH_INTERVAL_MINUTES")
+    # 0 = брать target_coverage_days из дашборда
+    stock_target_days: int = Field(default=0, alias="STOCK_TARGET_DAYS")
+    stock_min_recommend: int = Field(default=5, alias="STOCK_MIN_RECOMMEND")
+    stock_max_tasks: int = Field(default=10, alias="STOCK_MAX_TASKS")
+    # кому ставить задачи; 0 = владельцу
+    stock_assignee_telegram_id: int = Field(default=0, alias="STOCK_ASSIGNEE_TELEGRAM_ID")
+
     @field_validator(
         "telegram_proxy",
         "database_url",
         "web_password",
         "openai_api_key",
         "openai_base_url",
+        "wb_dashboard_url",
         mode="before",
     )
     @classmethod
@@ -37,7 +52,7 @@ class Settings(BaseSettings):
             return ""
         return value
 
-    @field_validator("allow_self_join", mode="before")
+    @field_validator("allow_self_join", "stock_watch_enabled", mode="before")
     @classmethod
     def boolish(cls, value: object) -> object:
         if isinstance(value, str):

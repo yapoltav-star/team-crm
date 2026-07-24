@@ -39,3 +39,17 @@ uvicorn app.main:app --reload --port 8000
 Проверка: открой `/health` — должно быть `"db":"postgres","persistent":true`.
 
 Бот и сайт крутятся одним сервисом.
+
+## Автозадачи по остаткам (WB Dashboard)
+
+CRM раз в N минут читает `WB_DASHBOARD_URL/api/dashboard-data` и создаёт задачи
+на артикулы с покрытием ниже цели (как в разделе поставок дашборда).
+
+Variables:
+- `WB_DASHBOARD_URL`
+- `STOCK_WATCH_ENABLED=true`
+- `STOCK_MIN_RECOMMEND=5` — не создавать задачу, если рекомендовано поставить меньше
+- `STOCK_MAX_TASKS=10` — максимум новых задач за прогон
+- `STOCK_ASSIGNEE_TELEGRAM_ID` — кому (пусто/0 = владелец)
+
+Ручной запуск: `POST /api/stock-watch/run` (с `x-crm-password` если задан).
