@@ -89,3 +89,17 @@ class TaskRun(Base):
     escalated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     task: Mapped[Task] = relationship(back_populates="runs")
+
+
+class Article(Base):
+    """Seller SKU catalog for bot shorthand → vendorCode."""
+
+    __tablename__ = "articles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    vendor_code: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    nm_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    stock: Mapped[int] = mapped_column(Integer, default=0)
+    sales_90d: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

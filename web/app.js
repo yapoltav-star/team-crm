@@ -358,7 +358,9 @@ $("#quickAdd").addEventListener("submit", async (e) => {
       }
     }
   } catch (err) {
-    alert(err.message || String(err));
+    const msg = err.message || String(err);
+    // 409 from SKU resolver comes as plain text clarify prompt
+    alert(msg);
   }
 });
 

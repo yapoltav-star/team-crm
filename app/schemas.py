@@ -39,6 +39,15 @@ class ProjectOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ArticleOut(BaseModel):
+    vendor_code: str
+    nm_id: int | None = None
+    stock: int = 0
+    sales_90d: int = 0
+
+    model_config = {"from_attributes": True}
+
+
 class TaskIn(BaseModel):
     title: str
     description: str = ""

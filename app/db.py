@@ -30,6 +30,11 @@ async def init_db() -> None:
                 await conn.execute(text(stmt))
             except Exception:
                 pass
+    # справочник артикулов из seed
+    from app.catalog import seed_articles_from_file
+
+    async with SessionLocal() as session:
+        await seed_articles_from_file(session)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

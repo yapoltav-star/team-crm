@@ -10,9 +10,11 @@ from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.db import get_session
+from app.catalog import load_catalog
 from app.models import Employee, Project, Task
 from app.notify import notify_task_assignee
 from app.schemas import (
+    ArticleOut,
     BoardOut,
     EmployeeIn,
     EmployeeOut,
@@ -23,6 +25,7 @@ from app.schemas import (
     TaskOut,
     TaskPatch,
 )
+from app.sku import enrich_task_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -94,6 +97,20 @@ async def board(session: AsyncSession = Depends(get_session)) -> BoardOut:
     )
 
 
+@router.get("/articles", response_model=list[ArticleOut])
+async def list_articles(session: AsyncSession = Depends(get_session)) -> list[ArticleOut]:
+    rows = await load_catalog(session)
+    return [
+        ArticleOut(
+            vendor_code=a.vendor_code,
+            nm_id=a.nm_id,
+            stock=a.stock,
+            sales_90d=a.sales_90d,
+        )
+        for a in rows
+    ]
+
+
 @router.post("/projects", response_model=ProjectOut)
 async def create_project(body: ProjectIn, session: AsyncSession = Depends(get_session)) -> ProjectOut:
     project = Project(name=body.name, color=body.color)
@@ -152,10 +169,21 @@ async def create_task(
 ) -> TaskOut:
     settings = get_settings()
     now_hm = datetime.now(settings.tz).strftime("%H:%M")
+    title = body.title
+    articles = (body.articles or "").strip()
+    catalog = await load_catalog(session)
+    title2, arts, clarify = enrich_task_text(title, catalog)
+    if clarify and not articles:
+        raise HTTPException(409, clarify)
+    if arts and not articles:
+        articles = arts
+        title = title2
+    elif arts:
+        title = title2
     task = Task(
-        title=body.title,
+        title=title,
         description=body.description,
-        articles=(body.articles or "").strip(),
+        articles=articles,
         project_id=body.project_id,
         assignee_id=body.assignee_id,
         created_by_id=body.created_by_id,

@@ -57,9 +57,13 @@ async def notify_task_assignee(
     run = await ensure_run(session, task.id, due)
     if not run.id:
         await session.refresh(run)
+    sku_line = ""
+    if (task.articles or "").strip():
+        codes = ", ".join(x.strip() for x in task.articles.split(",") if x.strip())
+        sku_line = f"\nАртикул: <code>{codes}</code>"
     text = (
         f"📋 Новая задача от <b>{author}</b>\n"
-        f"<b>{task.title}</b>\n\n"
+        f"<b>{task.title}</b>{sku_line}\n\n"
         "Жми «Сделано», когда выполнишь."
     )
     try:

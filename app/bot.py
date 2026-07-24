@@ -123,9 +123,23 @@ async def create_and_notify(
     kind: str = "once",
     weekdays: str = "",
     notify_time: str | None = None,
-) -> tuple[Task, bool, str | None]:
+    articles: str = "",
+) -> tuple[Task | None, bool, str | None, str | None]:
+    """Returns (task, notify_ok, notify_err, clarify_msg). clarify_msg => task not created."""
+    from app.catalog import load_catalog
+    from app.sku import enrich_task_text
+
+    catalog = await load_catalog(session)
+    title2, arts, clarify = enrich_task_text(title, catalog)
+    if clarify:
+        return None, False, None, clarify
+    if arts:
+        articles = arts
+    title = title2
+
     task = Task(
         title=title,
+        articles=articles or "",
         assignee_id=assignee.id,
         created_by_id=author.id,
         status="todo",
@@ -153,7 +167,7 @@ async def create_and_notify(
         )
         if not ok and err:
             logger.warning("bot notify failed: %s", err)
-    return task, ok, err
+    return task, ok, err, None
 
 async def _reply_created(message: Message, ok: bool, err: str | None, ok_text: str) -> None:
     if ok:
@@ -380,7 +394,7 @@ def build_dispatcher(
             if not author:
                 await message.answer("Нет доступа.")
                 return
-            _, ok, err = await create_and_notify(
+            task, ok, err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -388,6 +402,9 @@ def build_dispatcher(
                 assignee=author,
                 author=author,
             )
+            if clarify:
+                await message.answer(clarify)
+                return
         await _reply_created(message, ok, err, "Задача себе создана.")
 
     @dp.message(Command("boss"))
@@ -402,7 +419,7 @@ def build_dispatcher(
             if not author:
                 await message.answer("Нет доступа.")
                 return
-            _, ok, err = await create_and_notify(
+            task, ok, err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -410,6 +427,9 @@ def build_dispatcher(
                 assignee=owner,
                 author=author,
             )
+            if clarify:
+                await message.answer(clarify)
+                return
         await _reply_created(message, ok, err, "Задача отправлена владельцу.")
 
     @dp.message(Command("for"))
@@ -431,7 +451,7 @@ def build_dispatcher(
             if not assignee:
                 await message.answer("Человек не найден в CRM. Сначала /add_manager.")
                 return
-            _, ok, err = await create_and_notify(
+            task, ok, err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -439,6 +459,9 @@ def build_dispatcher(
                 assignee=assignee,
                 author=author,
             )
+            if clarify:
+                await message.answer(clarify)
+                return
         await _reply_created(message, ok, err, f"Задача отправлена: {title}")
 
     @dp.message(Command("my"))
@@ -535,7 +558,7 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Сначала /add_manager")
                 return
-            _, ok, err = await create_and_notify(
+            task, ok, err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -543,6 +566,9 @@ def build_dispatcher(
                 assignee=emp,
                 author=author,
             )
+            if clarify:
+                await message.answer(clarify)
+                return
         await _reply_created(message, ok, err, "Задача создана и отправлена.")
 
     @dp.message(Command("weekly"))
@@ -565,7 +591,7 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Сначала /add_manager")
                 return
-            await create_and_notify(
+            task, ok, err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -576,6 +602,9 @@ def build_dispatcher(
                 weekdays=parts[1],
                 notify_time=parts[2],
             )
+            if clarify:
+                await message.answer(clarify)
+                return
         await message.answer(f"Еженедельная задача создана: {title}")
 
     @dp.callback_query(F.data.startswith("done:"))
@@ -689,7 +718,7 @@ def build_dispatcher(
                             f"Не понял, кому задача («{token}»). Назови имя из команды или скажи «себе»/«боссу»."
                         )
                         return
-                    _, ok, err = await create_and_notify(
+                    task, ok, err, clarify = await create_and_notify(
                         session=session,
                         bot=message.bot,
                         settings=settings,
