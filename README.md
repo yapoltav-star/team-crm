@@ -36,7 +36,13 @@ uvicorn app.main:app --reload --port 8000
    - `WEB_PASSWORD` (пароль к сайту)
 6. Deploy. Settings → Networking → Generate Domain
 
-Проверка: открой `/health` — должно быть `"db":"postgres","persistent":true`.
+**Безопасность:**
+- `WEB_PASSWORD` обязателен на Railway (без него сервис не стартует)
+- весь сайт за паролем + страница `/login`
+- бот: только заявка → ты жмёшь «Добавить»
+- ссылку CRM лучше не светить публично
+
+Проверка: `/health` → `"db":"postgres","auth":true`.
 
 Бот и сайт крутятся одним сервисом.
 
