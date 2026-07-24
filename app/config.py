@@ -29,7 +29,7 @@ class Settings(BaseSettings):
         alias="WB_DASHBOARD_URL",
     )
     stock_watch_enabled: bool = Field(default=True, alias="STOCK_WATCH_ENABLED")
-    stock_watch_interval_minutes: int = Field(default=180, alias="STOCK_WATCH_INTERVAL_MINUTES")
+    stock_watch_interval_minutes: int = Field(default=60, alias="STOCK_WATCH_INTERVAL_MINUTES")
     # алерт если остаток семьи на нашем складе ≤ этого числа (0 = пусто)
     stock_own_max_stock: int = Field(default=0, alias="STOCK_OWN_MAX_STOCK")
     # минимум заказов за период — без продаж задачи не создаём
