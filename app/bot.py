@@ -1593,12 +1593,9 @@ def build_dispatcher(
                             "Проверь группы и роли в разделе «Проекты» на сайте."
                         )
                         return
+                    # адресат не указан / не распознан → себе
                     if not targets:
-                        await wait.edit_text(
-                            f"Не понял, кому задача («{token}»). "
-                            "Назови имя, «себе», «боссу», «всем» или «менеджерам ПВС»."
-                        )
-                        return
+                        targets = [author]
                     due_hint = str(intent.get("due") or "default")
                     task, _ok, _err, clarify = await create_and_notify(
                         session=session,
