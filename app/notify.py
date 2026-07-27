@@ -62,6 +62,24 @@ def ask_comment_kb(task_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def confirm_task_kb(task_id: int) -> InlineKeyboardMarkup:
+    """После создания: подтвердить отправку или удалить черновик."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтверждаю",
+                    callback_data=f"tc:ok:{task_id}",
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"tc:no:{task_id}",
+                ),
+            ]
+        ]
+    )
+
+
 # обратная совместимость импортов
 def done_kb(run_id: int, task_id: int) -> InlineKeyboardMarkup:
     return task_action_kb(run_id, task_id, status="todo")

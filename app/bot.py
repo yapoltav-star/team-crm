@@ -36,6 +36,7 @@ from app.config import Settings
 from app.models import Employee, Task, TaskAssignee, TaskRun
 from app.notify import (
     ask_comment_kb,
+    confirm_task_kb,
     ensure_run,
     notify_task_assignee,
     notify_task_comment,
@@ -201,8 +202,13 @@ async def create_and_notify(
     articles: str = "",
     due_date: date | None = None,
     due_hint: str | None = None,
+    notify: bool = False,
+    as_draft: bool = True,
 ) -> tuple[Task | None, bool, str | None, str | None]:
-    """Returns (task, notify_ok, notify_err, clarify_msg). clarify_msg => task not created."""
+    """
+    Returns (task, notify_ok, notify_err, clarify_msg).
+    По умолчанию создаёт черновик без пуша исполнителю — ждём «Подтверждаю».
+    """
     from app.catalog import load_catalog
     from app.sku import enrich_task_text
 
@@ -240,6 +246,7 @@ async def create_and_notify(
         weekdays=weekdays,
         notify_time=notify_time or datetime.now(settings.tz).strftime("%H:%M"),
         due_date=due,
+        active=not as_draft,
     )
     session.add(task)
     await session.commit()
@@ -258,7 +265,11 @@ async def create_and_notify(
         session, task, [e.id for e in targets], actor_id=author.id, log=True
     )
     await add_event(
-        session, task.id, f"Создана — {author.name}", kind="created", actor_id=author.id
+        session,
+        task.id,
+        f"{'Черновик' if as_draft else 'Создана'} — {author.name}",
+        kind="created",
+        actor_id=author.id,
     )
     await session.commit()
     task = (
@@ -274,7 +285,7 @@ async def create_and_notify(
     ).one()
 
     ok, err = True, None
-    if kind == "once":
+    if notify and kind == "once" and task.active:
         ok, err = await notify_task_assignee(
             bot=bot,
             session=session,
@@ -292,12 +303,45 @@ async def create_and_notify(
             )
     return task, ok, err, None
 
-async def _reply_created(message: Message, ok: bool, err: str | None, ok_text: str) -> None:
-    if ok:
-        await message.answer(ok_text)
-    else:
-        await message.answer(ok_text + "\n\n⚠️ В Telegram не ушло: " + (err or "неизвестно"))
 
+def _assignee_names(task: Task) -> str:
+    names = [
+        link.employee.name
+        for link in (task.assignees or [])
+        if link.employee
+    ]
+    if not names and task.assignee:
+        names = [task.assignee.name]
+    return ", ".join(names) if names else "—"
+
+
+def format_task_confirm_text(task: Task) -> str:
+    due_txt = task.due_date.strftime("%d.%m.%Y") if task.due_date else "—"
+    who = _assignee_names(task)
+    return (
+        f"Проверь задачу перед отправкой:\n"
+        f"Кому: {who}\n"
+        f"«{task.title}»\n"
+        f"Срок: {due_txt}\n\n"
+        f"Подтвердить — отправим исполнителю. Удалить — отменим."
+    )
+
+
+async def _reply_task_for_confirm(
+    message: Message,
+    task: Task,
+    *,
+    edit_message: Message | None = None,
+) -> None:
+    text = format_task_confirm_text(task)
+    kb = confirm_task_kb(task.id)
+    if edit_message:
+        try:
+            await edit_message.edit_text(text, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    await message.answer(text, reply_markup=kb)
 
 async def _load_task_for_comment(session: AsyncSession, task_id: int) -> Task | None:
     return await session.scalar(
@@ -729,7 +773,7 @@ def build_dispatcher(
             if not author:
                 await message.answer("Нет доступа.")
                 return
-            task, ok, err, clarify = await create_and_notify(
+            task, _ok, _err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -740,7 +784,10 @@ def build_dispatcher(
             if clarify:
                 await message.answer(clarify)
                 return
-        await _reply_created(message, ok, err, "Задача себе создана.")
+            if not task:
+                await message.answer("Не удалось создать задачу.")
+                return
+            await _reply_task_for_confirm(message, task)
 
     @dp.message(Command("boss"))
     async def cmd_boss(message: Message, command: CommandObject) -> None:
@@ -754,7 +801,7 @@ def build_dispatcher(
             if not author:
                 await message.answer("Нет доступа.")
                 return
-            task, ok, err, clarify = await create_and_notify(
+            task, _ok, _err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -765,7 +812,10 @@ def build_dispatcher(
             if clarify:
                 await message.answer(clarify)
                 return
-        await _reply_created(message, ok, err, "Задача отправлена владельцу.")
+            if not task:
+                await message.answer("Не удалось создать задачу.")
+                return
+            await _reply_task_for_confirm(message, task)
 
     @dp.message(Command("for"))
     async def cmd_for(message: Message, command: CommandObject) -> None:
@@ -786,7 +836,7 @@ def build_dispatcher(
             if not assignee:
                 await message.answer("Человек не найден в CRM. Сначала /add_manager.")
                 return
-            task, ok, err, clarify = await create_and_notify(
+            task, _ok, _err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -797,7 +847,10 @@ def build_dispatcher(
             if clarify:
                 await message.answer(clarify)
                 return
-        await _reply_created(message, ok, err, f"Задача отправлена: {title}")
+            if not task:
+                await message.answer("Не удалось создать задачу.")
+                return
+            await _reply_task_for_confirm(message, task)
 
     @dp.message(Command("my"))
     async def cmd_my(message: Message) -> None:
@@ -893,7 +946,7 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Сначала /add_manager")
                 return
-            task, ok, err, clarify = await create_and_notify(
+            task, _ok, _err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -904,7 +957,10 @@ def build_dispatcher(
             if clarify:
                 await message.answer(clarify)
                 return
-        await _reply_created(message, ok, err, "Задача создана и отправлена.")
+            if not task:
+                await message.answer("Не удалось создать задачу.")
+                return
+            await _reply_task_for_confirm(message, task)
 
     @dp.message(Command("weekly"))
     async def weekly_task(message: Message, command: CommandObject) -> None:
@@ -926,7 +982,7 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Сначала /add_manager")
                 return
-            task, ok, err, clarify = await create_and_notify(
+            task, _ok, _err, clarify = await create_and_notify(
                 session=session,
                 bot=message.bot,
                 settings=settings,
@@ -940,16 +996,146 @@ def build_dispatcher(
             if clarify:
                 await message.answer(clarify)
                 return
-        await message.answer(f"Еженедельная задача создана: {title}")
+            if not task:
+                await message.answer("Не удалось создать задачу.")
+                return
+            await _reply_task_for_confirm(message, task)
 
     def _task_allowed_ids(task: Task) -> set[int]:
         allowed = {int(settings.owner_telegram_id)}
+        if task.created_by and task.created_by.telegram_id is not None:
+            allowed.add(int(task.created_by.telegram_id))
         if task.assignee and task.assignee.telegram_id is not None:
             allowed.add(int(task.assignee.telegram_id))
         for link in task.assignees or []:
             if link.employee and link.employee.telegram_id is not None:
                 allowed.add(int(link.employee.telegram_id))
         return allowed
+
+    @dp.callback_query(F.data.startswith("tc:"))
+    async def on_task_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+        """Подтвердить черновик → активировать и уведомить; или удалить."""
+        if not callback.data or not callback.from_user:
+            return
+        parts = callback.data.split(":")
+        if len(parts) != 3 or parts[1] not in {"ok", "no"} or not parts[2].isdigit():
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        decision = parts[1]
+        task_id = int(parts[2])
+        uid = int(callback.from_user.id)
+
+        async with session_factory() as session:
+            task = await session.scalar(
+                select(Task)
+                .where(Task.id == task_id)
+                .options(
+                    selectinload(Task.assignee),
+                    selectinload(Task.created_by),
+                    selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+                )
+            )
+            if not task:
+                await callback.answer("Задача не найдена", show_alert=True)
+                return
+            creator_tid = (
+                int(task.created_by.telegram_id)
+                if task.created_by and task.created_by.telegram_id is not None
+                else None
+            )
+            if uid != int(settings.owner_telegram_id) and uid != creator_tid:
+                await callback.answer("Только автор может подтвердить", show_alert=True)
+                return
+
+            from app.tasks_service import add_event
+
+            if decision == "no":
+                task.active = False
+                await add_event(
+                    session,
+                    task.id,
+                    "Черновик удалён без отправки",
+                    kind="deleted",
+                    actor_id=task.created_by_id,
+                )
+                await session.commit()
+                await callback.answer("Удалено")
+                if callback.message:
+                    try:
+                        await callback.message.edit_text("🗑 Задача удалена, никому не отправили.")
+                    except Exception:
+                        await callback.message.answer("🗑 Задача удалена, никому не отправили.")
+                return
+
+            # confirm
+            if task.active:
+                await callback.answer("Уже отправлена", show_alert=True)
+                return
+            task.active = True
+            await add_event(
+                session,
+                task.id,
+                "Подтверждена и отправлена",
+                kind="created",
+                actor_id=task.created_by_id,
+            )
+            await session.commit()
+            task = await _load_task_for_comment(session, task.id) or task
+
+            today = datetime.now(settings.tz).date()
+            targets = [
+                link.employee
+                for link in (task.assignees or [])
+                if link.employee
+            ]
+            if not targets and task.assignee:
+                targets = [task.assignee]
+
+            ok, err = True, None
+            if task.kind == "once" and targets:
+                ok, err = await notify_task_assignee(
+                    bot=callback.bot,
+                    session=session,
+                    task=task,
+                    due=task.due_date or today,
+                    employees=targets,
+                )
+
+            data = await state.get_data()
+            comments = data.get("tc_comments") or {}
+            pending = (comments.pop(str(task_id), None) or "").strip()
+            await state.update_data(tc_comments=comments)
+
+            author = task.created_by
+            if pending and author:
+                await _attach_comment_and_notify(
+                    session=session,
+                    bot=callback.bot,
+                    task=task,
+                    author=author,
+                    body=pending,
+                )
+
+            who = _assignee_names(task)
+            due_txt = task.due_date.strftime("%d.%m.%Y") if task.due_date else "—"
+            reply = f"✅ Отправлено: {who}\n«{task.title}»\nСрок: {due_txt}"
+            if task.kind == "once":
+                if ok and not err:
+                    reply += f"\n📬 Уведомления: {len(targets)} из {len(targets)}"
+                elif err:
+                    reply += f"\n\n⚠️ {err}"
+            await callback.answer("Отправлено")
+            if callback.message:
+                try:
+                    await callback.message.edit_text(reply)
+                except Exception:
+                    await callback.message.answer(reply)
+
+            if author and not pending and callback.message:
+                await callback.message.answer(
+                    "Добавить комментарий к этой задаче?",
+                    reply_markup=ask_comment_kb(task.id),
+                )
 
     @dp.callback_query(F.data.startswith("doing:") | F.data.startswith("done:"))
     async def on_task_status(callback: CallbackQuery) -> None:
@@ -1414,7 +1600,7 @@ def build_dispatcher(
                         )
                         return
                     due_hint = str(intent.get("due") or "default")
-                    task, ok, err, clarify = await create_and_notify(
+                    task, _ok, _err, clarify = await create_and_notify(
                         session=session,
                         bot=message.bot,
                         settings=settings,
@@ -1426,37 +1612,15 @@ def build_dispatcher(
                     if clarify:
                         await wait.edit_text(clarify)
                         return
-                    due_txt = (
-                        task.due_date.strftime("%d.%m.%Y")
-                        if task and task.due_date
-                        else "—"
-                    )
-                    if len(targets) == 1:
-                        who = targets[0].name
-                    elif (
-                        project_audience_intent(task_text, list(people)) is not None
-                        or find_role_in_text(task_text) is not None
-                    ):
-                        who = _audience_label(list(people), targets, task_text)
-                    else:
-                        names = ", ".join(e.name for e in targets)
-                        who = f"всем ({len(targets)}): {names}"
-                    reply = f"Готово: задача для {who}\n«{title}»\nСрок: {due_txt}"
-                    if ok and not err:
-                        reply += f"\n📬 Уведомления: {len(targets)} из {len(targets)}"
-                    elif ok and err:
-                        reply += f"\n\n⚠️ {err}"
-                    elif not ok:
-                        reply += f"\n\n⚠️ В Telegram не ушло: {err or 'неизвестно'}"
-                    await wait.edit_text(reply)
-                    await _after_task_created_comment(
-                        message=message,
-                        state=state,
-                        session=session,
-                        task=task,
-                        author=author,
-                        inline_comment=comment_body,
-                    )
+                    if not task:
+                        await wait.edit_text("Не удалось создать задачу.")
+                        return
+                    if comment_body:
+                        data = await state.get_data()
+                        comments = dict(data.get("tc_comments") or {})
+                        comments[str(task.id)] = comment_body
+                        await state.update_data(tc_comments=comments)
+                    await _reply_task_for_confirm(message, task, edit_message=wait)
                     return
                 if action in {"list_my_tasks", "list_tasks"}:
                     who = str(intent.get("who") or "me").strip()
