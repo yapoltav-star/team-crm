@@ -1241,8 +1241,8 @@ def build_dispatcher(
     def _resolve_assignees(
         people: list[Employee], token: str, author: Employee, *, raw_text: str = ""
     ) -> list[Employee] | None:
-        # 0) явное имя в тексте важнее «ПВС» в описании бренда
-        named = find_named_assignees(raw_text, people)
+        # 0) имя только сразу после «поставь задачу …»
+        named = find_named_assignees(raw_text, people, author=author)
         if named:
             return named
 
@@ -1300,7 +1300,9 @@ def build_dispatcher(
                 from app.nlp import parse_intent
 
                 is_owner = message.from_user.id == settings.owner_telegram_id
-                named_early = find_named_assignees(task_text, list(people))
+                named_early = find_named_assignees(
+                    task_text, list(people), author=author
+                )
                 # быстрый путь: аудитория по проекту/роли — только при явном адресате
                 early_audience = (
                     None

@@ -63,16 +63,19 @@ ALL_ONLY_RE = re.compile(
     r"(?![а-яa-z0-9])"
 )
 
-# явные обращения «поставь задачу Софии / для Вани / Соне: …»
-NAME_ASSIGN_RE = re.compile(
-    r"(?i)(?:^|[.!?]\s*)"
-    r"(?:поставь|назначь|создай|сделай)?\s*"
+# Адресат — ТОЛЬКО сразу после «поставь/назначь/создай задачу …»
+# «согласовывать с Дилей» в тексте задачи сюда не попадает.
+ASSIGN_SLOT_RE = re.compile(
+    r"(?i)(?:^|[\n.!?]\s*)"
+    r"(?:поставь|назначь|создай|сделай)\s+"
     r"(?:пожалуйста\s+)?"
     r"(?:задач[ауею]\s+)?"
     r"(?:для\s+|на\s+)?"
-    r"([а-яёa-z][а-яёa-z\-']{1,30})"
-    r"(?:\s*[,:]|\s+(?:чтобы|разобрать|сделать|проверить|загрузить|написать|ответить|"
-    r"связаться|посмотреть|подготовить|согласовать|отправить|взять|закрыть)\b)",
+    r"("
+    r"мне|себе|боссу|владельцу|всем|всех|"
+    r"[а-яёa-z][а-яёa-z\-']{1,30}"
+    r"(?:\s*(?:,|и)\s*[а-яёa-z][а-яёa-z\-']{1,30}){0,3}"
+    r")"
 )
 
 
@@ -176,73 +179,57 @@ def match_person_token(people: list[Employee], token: str) -> Employee | None:
     return best if best_score >= 3 else None
 
 
-def find_named_assignees(text: str, people: list[Employee]) -> list[Employee]:
+def find_named_assignees(
+    text: str,
+    people: list[Employee],
+    *,
+    author: Employee | None = None,
+) -> list[Employee]:
     """
-    Кому именно поставили задачу по имени.
-    «Поставь задачу Софии разобраться с брендом ПВС» → [София],
-    а не вся группа ПВС.
+    Исполнители — только имена сразу после «поставь задачу …».
+
+    «Поставь задачу Софии разобраться с Дилей» → [София]
+    «Мне планировать … с Дилей и Ярославом» без «поставь задачу» → []
     """
     raw = (text or "").strip()
     if not raw:
         return []
 
+    m = ASSIGN_SLOT_RE.search(raw)
+    if not m:
+        return []
+
+    slot = _norm(m.group(1))
+    if not slot:
+        return []
+
+    # «мне / себе» → автор, если передан
+    if slot in {"мне", "себе", "я"}:
+        return [author] if author is not None else []
+
+    if slot in {"боссу", "владельцу"}:
+        owner = next((p for p in people if p.role == "owner"), None)
+        return [owner] if owner else []
+
+    # «всем» здесь не разворачиваем в имена — это аудитория
+    if slot in {"всем", "всех"}:
+        return []
+
     found: list[Employee] = []
     seen: set[int] = set()
-
-    def add(emp: Employee | None) -> None:
+    # слот может быть «Софии и Ване» / «Софии, Ване» — не режем букву «и» внутри имени
+    for token in re.split(r"\s*,\s*|\s+и\s+", slot):
+        token = token.strip()
+        if not token:
+            continue
+        if find_project_in_text(token, people) or find_role_in_text(token):
+            continue
+        if _norm(token) in ROLE_FORMS:
+            continue
+        emp = match_person_token(people, token)
         if emp and emp.id not in seen:
             seen.add(emp.id)
             found.append(emp)
-
-    for m in NAME_ASSIGN_RE.finditer(raw):
-        token = next((g for g in m.groups() if g), "")
-        if not token:
-            continue
-        # служебные слова — не имена
-        if _norm(token) in {
-            "задачу",
-            "задача",
-            "всем",
-            "всех",
-            "себе",
-            "мне",
-            "боссу",
-            "мне",
-            "пожалуйста",
-            "сегодня",
-            "завтра",
-            "сроком",
-        }:
-            continue
-        # не путать проект с именем
-        if find_project_in_text(token, people):
-            continue
-        if find_role_in_text(token):
-            continue
-        add(match_person_token(people, token))
-
-    # запасной путь: «… Софии …» / «Соне» рядом с «задач»
-    if not found and re.search(r"(?i)задач", raw):
-        for p in people:
-            first = _norm(p.name).split()[0]
-            stem = _name_stem(first)
-            if len(stem) < 3:
-                continue
-            if re.search(
-                rf"(?i)(?<![а-яa-z0-9]){re.escape(stem)}[а-яёa-z]*",
-                raw,
-            ):
-                # имя должно быть до описания работы / рядом с «задач»
-                add(p)
-
-    # «Соне» ↔ София вручную, если в тексте есть сон*
-    if not found:
-        if re.search(r"(?i)(?<![а-яa-z0-9])сон[еяиью]?(?![а-яa-z0-9])", raw):
-            for p in people:
-                if _norm(p.name).split()[0].startswith("софи"):
-                    add(p)
-                    break
-
     return found
 
 
