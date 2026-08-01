@@ -260,11 +260,7 @@ function setView(view) {
   document.querySelectorAll("#navTabs button").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === view);
   });
-  if (view !== "mindmap") {
-    state.currentMap = null;
-    $("#mmListWrap")?.classList.remove("hidden");
-    $("#mmEditorWrap")?.classList.add("hidden");
-  }
+  // Не трогаем currentMap при уходе — доска остаётся на сервере и в памяти
 }
 
 function fillSelects() {
@@ -872,7 +868,11 @@ function render() {
   if (state.view === "home") renderHome();
   if (state.view === "board") renderBoardView();
   if (state.view === "templates") renderTemplates();
-  if (state.view === "mindmap") renderMindmap();
+  if (state.view === "mindmap") {
+    // полный вход с перезагрузкой списка — только если ещё не в редакторе
+    if (state.currentMap?.id) renderMindmap();
+    else enterMindmapView();
+  }
   if (state.view === "archive") renderArchive();
 }
 
@@ -887,6 +887,7 @@ function mmRoot(nodes) {
 function showMmList() {
   state.currentMap = null;
   state.mmArrowFrom = null;
+  localStorage.removeItem("pw_mindmap_id");
   $("#mmListWrap")?.classList.remove("hidden");
   $("#mmEditorWrap")?.classList.add("hidden");
 }
@@ -901,7 +902,7 @@ function renderMindmapList() {
   const list = $("#mmList");
   if (!list) return;
   if (!state.mindmaps.length) {
-    list.innerHTML = `<div class="home-empty">Карт пока нет — создай первую и зови команду дополнять идеи.</div>`;
+    list.innerHTML = `<div class="home-empty">Досок пока нет — нажми «+ Доска», чтобы создать первую. Все доски сохраняются и доступны всей команде.</div>`;
     return;
   }
   list.innerHTML = "";
@@ -917,6 +918,7 @@ function renderMindmapList() {
       <div class="meta">
         ${m.created_by_name ? `<span class="chip assignee">${escapeHtml(m.created_by_name)}</span>` : ""}
         ${m.updated_at ? `<span class="chip">${formatDt(m.updated_at)}</span>` : ""}
+        <span class="chip">открыть →</span>
       </div>
     `;
     el.addEventListener("click", () => openMindMap(m.id));
@@ -1228,6 +1230,7 @@ async function refreshCurrentMap() {
   const keepFrom = state.mmArrowFrom;
   state.currentMap = await api(`/api/mindmaps/${state.currentMap.id}`);
   state.mmArrowFrom = keepFrom;
+  localStorage.setItem("pw_mindmap_id", String(state.currentMap.id));
   $("#mmTitleInput").value = state.currentMap.title || "";
   renderMmNodes();
   await loadMindmaps();
@@ -1240,16 +1243,41 @@ async function openMindMap(id) {
     state.mmPan = { x: 60, y: 40 };
     state.mmArrowFrom = null;
     state.mmTool = "select";
+    localStorage.setItem("pw_mindmap_id", String(id));
     $("#mmTitleInput").value = state.currentMap.title || "";
     showMmEditor();
     renderMmNodes();
   } catch (err) {
+    localStorage.removeItem("pw_mindmap_id");
+    state.currentMap = null;
     alert(err.message || String(err));
+    showMmList();
+    renderMindmapList();
   }
 }
 
+async function enterMindmapView() {
+  await loadMindmaps();
+  const savedId = Number(localStorage.getItem("pw_mindmap_id") || 0) || null;
+  if (state.currentMap?.id) {
+    try {
+      await refreshCurrentMap();
+      showMmEditor();
+      return;
+    } catch (_) {
+      state.currentMap = null;
+    }
+  }
+  if (savedId && state.mindmaps.some((m) => m.id === savedId)) {
+    await openMindMap(savedId);
+    return;
+  }
+  showMmList();
+  renderMindmapList();
+}
+
 function renderMindmap() {
-  if (state.currentMap) {
+  if (state.currentMap?.id) {
     showMmEditor();
     renderMmNodes();
   } else {
@@ -1261,8 +1289,9 @@ function renderMindmap() {
 async function loadMindmaps() {
   try {
     state.mindmaps = await api("/api/mindmaps");
-  } catch (_) {
-    state.mindmaps = [];
+  } catch (err) {
+    console.error("loadMindmaps", err);
+    state.mindmaps = state.mindmaps || [];
   }
 }
 
@@ -1545,8 +1574,13 @@ async function load() {
 
 /* —— events —— */
 document.querySelectorAll("#navTabs button").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    setView(btn.dataset.view);
+  btn.addEventListener("click", async () => {
+    const view = btn.dataset.view;
+    setView(view);
+    if (view === "mindmap") {
+      await enterMindmapView();
+      return;
+    }
     render();
   });
 });
@@ -1917,8 +1951,6 @@ $("#btnNewMindMap")?.addEventListener("click", async () => {
 });
 
 $("#btnMmBack")?.addEventListener("click", async () => {
-  state.currentMap = null;
-  state.mmArrowFrom = null;
   await loadMindmaps();
   showMmList();
   renderMindmapList();
@@ -1926,9 +1958,10 @@ $("#btnMmBack")?.addEventListener("click", async () => {
 
 $("#btnMmDelete")?.addEventListener("click", async () => {
   if (!state.currentMap) return;
-  if (!confirm(`Удалить карту «${state.currentMap.title}»?`)) return;
+  if (!confirm(`Удалить доску «${state.currentMap.title}» безвозвратно?`)) return;
   try {
     await api(`/api/mindmaps/${state.currentMap.id}`, { method: "DELETE" });
+    localStorage.removeItem("pw_mindmap_id");
     state.currentMap = null;
     await loadMindmaps();
     showMmList();

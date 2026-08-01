@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-5" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-6" />
 </head>
 <body>
   <header class="top">
@@ -127,15 +127,15 @@
       <div class="tpl-head">
         <div>
           <h1>Mind Map</h1>
-          <p>Общие карты идей — любой сотрудник может зайти и дополнять.</p>
+          <p>Доски идей сохраняются на сервере — заходи в любую и дополняй. Уход со вкладки ничего не удаляет.</p>
         </div>
-        <button type="button" id="btnNewMindMap">+ Карта</button>
+        <button type="button" id="btnNewMindMap">+ Доска</button>
       </div>
       <div id="mmList" class="tpl-list"></div>
     </div>
     <div id="mmEditorWrap" class="mm-editor-wrap hidden">
       <div class="mm-topbar">
-        <button type="button" id="btnMmBack" class="ghost">← К картам</button>
+        <button type="button" id="btnMmBack" class="ghost">← К доскам</button>
         <input id="mmTitleInput" type="text" maxlength="300" placeholder="Название доски" />
         <button type="button" id="btnMmDelete" class="ghost danger" title="Удалить карту">Удалить</button>
       </div>
@@ -370,6 +370,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-5"></script>
+  <script src="/static/app.js?v=pw-6"></script>
 </body>
 </html>
