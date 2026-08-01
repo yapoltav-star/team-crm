@@ -41,41 +41,6 @@ async def init_db() -> None:
                 UNIQUE (viewer_id, subject_id)
             )
             """,
-            """
-            CREATE TABLE IF NOT EXISTS mind_maps (
-                id SERIAL PRIMARY KEY,
-                title VARCHAR(300) NOT NULL,
-                description TEXT DEFAULT '',
-                created_by_id INTEGER REFERENCES employees(id),
-                active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP,
-                updated_at TIMESTAMP
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS mind_map_nodes (
-                id SERIAL PRIMARY KEY,
-                map_id INTEGER NOT NULL REFERENCES mind_maps(id),
-                parent_id INTEGER REFERENCES mind_map_nodes(id),
-                text VARCHAR(500) DEFAULT '',
-                x INTEGER DEFAULT 0,
-                y INTEGER DEFAULT 0,
-                color VARCHAR(20) DEFAULT '#fff475',
-                created_by_id INTEGER REFERENCES employees(id),
-                created_at TIMESTAMP
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS mind_map_arrows (
-                id SERIAL PRIMARY KEY,
-                map_id INTEGER NOT NULL REFERENCES mind_maps(id),
-                from_node_id INTEGER NOT NULL REFERENCES mind_map_nodes(id),
-                to_node_id INTEGER NOT NULL REFERENCES mind_map_nodes(id),
-                color VARCHAR(20) DEFAULT '#1f1f1f',
-                created_by_id INTEGER REFERENCES employees(id),
-                created_at TIMESTAMP
-            )
-            """,
         ):
             try:
                 await conn.execute(text(stmt))

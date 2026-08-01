@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-6" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-8" />
 </head>
 <body>
   <header class="top">
@@ -34,7 +34,6 @@
       <button type="button" data-view="home" class="active">Главная</button>
       <button type="button" data-view="board">Доска</button>
       <button type="button" data-view="templates">Шаблоны</button>
-      <button type="button" data-view="mindmap">Mind Map</button>
       <button type="button" data-view="archive">Архив</button>
     </nav>
     <div class="filters">
@@ -120,73 +119,6 @@
       <div id="tplList" class="tpl-list"></div>
     </div>
   </section>
-
-  <!-- MIND MAP -->
-  <section id="viewMindmap" class="view hidden">
-    <div id="mmListWrap" class="tpl-wrap">
-      <div class="tpl-head">
-        <div>
-          <h1>Mind Map</h1>
-          <p>Доски идей сохраняются на сервере — заходи в любую и дополняй. Уход со вкладки ничего не удаляет.</p>
-        </div>
-        <button type="button" id="btnNewMindMap">+ Доска</button>
-      </div>
-      <div id="mmList" class="tpl-list"></div>
-    </div>
-    <div id="mmEditorWrap" class="mm-editor-wrap hidden">
-      <div class="mm-topbar">
-        <button type="button" id="btnMmBack" class="ghost">← К доскам</button>
-        <input id="mmTitleInput" type="text" maxlength="300" placeholder="Название доски" />
-        <button type="button" id="btnMmDelete" class="ghost danger" title="Удалить карту">Удалить</button>
-      </div>
-      <div class="mm-stage">
-        <aside class="mm-tools" id="mmTools">
-          <button type="button" class="mm-tool active" data-tool="select" title="Выбрать / двигать">
-            <span>↖</span>
-          </button>
-          <button type="button" class="mm-tool" data-tool="sticky" title="Стикер">
-            <span class="mm-tool-sticky"></span>
-          </button>
-          <button type="button" class="mm-tool" data-tool="arrow" title="Стрелка">
-            <span>↗</span>
-          </button>
-        </aside>
-        <div id="mmCanvas" class="mm-canvas">
-          <svg id="mmLinks" class="mm-links">
-            <defs>
-              <marker id="mmArrowHead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
-                <path d="M0,0 L0,6 L9,3 z" fill="#1f1f1f"></path>
-              </marker>
-              <marker id="mmArrowHeadDraft" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
-                <path d="M0,0 L0,6 L9,3 z" fill="#2383e2"></path>
-              </marker>
-            </defs>
-            <g id="mmLinksBody"></g>
-            <path id="mmDraftArrow" class="mm-draft-arrow" d="" fill="none"></path>
-          </svg>
-          <div id="mmNodes" class="mm-nodes"></div>
-        </div>
-        <div id="mmToolHint" class="mm-tool-hint">Выбери инструмент слева</div>
-      </div>
-    </div>
-  </section>
-
-  <dialog id="mmIdeaDlg" class="mm-idea-dlg">
-    <form id="mmIdeaForm" method="dialog">
-      <header>
-        <h3 id="mmIdeaDlgTitle">Новая идея</h3>
-        <button type="button" id="mmIdeaClose" class="ghost">✕</button>
-      </header>
-      <label class="mm-idea-label">Текст
-        <textarea id="mmIdeaText" rows="4" maxlength="500" placeholder="Напиши идею…" required></textarea>
-      </label>
-      <div class="mm-idea-colors" id="mmIdeaColors"></div>
-      <menu>
-        <button type="button" id="mmIdeaCancel" class="ghost">Отмена</button>
-        <button type="submit" id="mmIdeaSave">Сохранить</button>
-      </menu>
-    </form>
-  </dialog>
 
   <!-- ARCHIVE -->
   <section id="viewArchive" class="view hidden">
@@ -370,6 +302,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-6"></script>
+  <script src="/static/app.js?v=pw-8"></script>
 </body>
 </html>

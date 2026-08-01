@@ -2,21 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from typing import Annotated
-
-from pydantic import BaseModel, BeforeValidator, Field
-
-
-def _as_int(v: object) -> object:
-    """Координаты с канвы могут прийти float — округляем до int."""
-    if isinstance(v, bool) or v is None:
-        return v
-    if isinstance(v, float):
-        return int(round(v))
-    return v
-
-
-CoordInt = Annotated[int, BeforeValidator(_as_int)]
+from pydantic import BaseModel, Field
 
 
 class EmployeeIn(BaseModel):
@@ -217,81 +203,5 @@ class TemplateOut(BaseModel):
     notify_time: str
     active: bool
     last_spawned_on: date | None = None
-
-    model_config = {"from_attributes": True}
-
-
-class MindMapIn(BaseModel):
-    title: str
-    description: str = ""
-    created_by_id: int | None = None
-
-
-class MindMapPatch(BaseModel):
-    title: str | None = None
-    description: str | None = None
-
-
-class MindMapNodeIn(BaseModel):
-    text: str = "Идея"
-    parent_id: int | None = None
-    x: CoordInt | None = None
-    y: CoordInt | None = None
-    color: str | None = None
-    created_by_id: int | None = None
-
-
-class MindMapNodePatch(BaseModel):
-    text: str | None = None
-    parent_id: int | None = None
-    x: CoordInt | None = None
-    y: CoordInt | None = None
-    color: str | None = None
-
-
-class MindMapNodeOut(BaseModel):
-    id: int
-    map_id: int
-    parent_id: int | None
-    text: str
-    x: CoordInt
-    y: CoordInt
-    color: str
-    created_by_id: int | None = None
-    created_by_name: str | None = None
-    created_at: datetime | None = None
-
-    model_config = {"from_attributes": True}
-
-
-class MindMapArrowIn(BaseModel):
-    from_node_id: int
-    to_node_id: int
-    color: str = "#1f1f1f"
-    created_by_id: int | None = None
-
-
-class MindMapArrowOut(BaseModel):
-    id: int
-    map_id: int
-    from_node_id: int
-    to_node_id: int
-    color: str = "#1f1f1f"
-    created_by_id: int | None = None
-
-    model_config = {"from_attributes": True}
-
-
-class MindMapOut(BaseModel):
-    id: int
-    title: str
-    description: str = ""
-    created_by_id: int | None = None
-    created_by_name: str | None = None
-    node_count: int = 0
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    nodes: list[MindMapNodeOut] = Field(default_factory=list)
-    arrows: list[MindMapArrowOut] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
