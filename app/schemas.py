@@ -2,7 +2,21 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, Field
+
+
+def _as_int(v: object) -> object:
+    """Координаты с канвы могут прийти float — округляем до int."""
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, float):
+        return int(round(v))
+    return v
+
+
+CoordInt = Annotated[int, BeforeValidator(_as_int)]
 
 
 class EmployeeIn(BaseModel):
@@ -221,8 +235,8 @@ class MindMapPatch(BaseModel):
 class MindMapNodeIn(BaseModel):
     text: str = "Идея"
     parent_id: int | None = None
-    x: int | None = None
-    y: int | None = None
+    x: CoordInt | None = None
+    y: CoordInt | None = None
     color: str | None = None
     created_by_id: int | None = None
 
@@ -230,8 +244,8 @@ class MindMapNodeIn(BaseModel):
 class MindMapNodePatch(BaseModel):
     text: str | None = None
     parent_id: int | None = None
-    x: int | None = None
-    y: int | None = None
+    x: CoordInt | None = None
+    y: CoordInt | None = None
     color: str | None = None
 
 
@@ -240,8 +254,8 @@ class MindMapNodeOut(BaseModel):
     map_id: int
     parent_id: int | None
     text: str
-    x: int
-    y: int
+    x: CoordInt
+    y: CoordInt
     color: str
     created_by_id: int | None = None
     created_by_name: str | None = None

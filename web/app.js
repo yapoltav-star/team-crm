@@ -1102,8 +1102,8 @@ function bindMmNode(el, node) {
       color: MM_COLORS[Math.floor(Math.random() * MM_COLORS.length)].hex,
       mode: "create",
       parentId: node.id,
-      x: node.x + 200,
-      y: node.y + (Math.random() * 80 - 40),
+      x: Math.round(node.x + 200),
+      y: Math.round(node.y + (Math.random() * 80 - 40)),
     });
   });
   el.querySelector(".mm-del")?.addEventListener("click", async (e) => {
@@ -1997,8 +1997,8 @@ $("#mmIdeaForm")?.addEventListener("submit", async (e) => {
           text,
           color,
           parent_id: draft.parentId ?? null,
-          x: draft.x ?? null,
-          y: draft.y ?? null,
+          x: draft.x == null ? null : Math.round(Number(draft.x)),
+          y: draft.y == null ? null : Math.round(Number(draft.y)),
           created_by_id: state.meId || null,
         }),
       });
@@ -2048,8 +2048,8 @@ $("#mmTitleInput")?.addEventListener("input", () => {
         color: state.mmSelectedColor || MM_COLORS[0].hex,
         mode: "create",
         parentId: null,
-        x: pos.x - MM_NODE_W / 2,
-        y: pos.y - MM_NODE_H / 2,
+        x: Math.round(pos.x - MM_NODE_W / 2),
+        y: Math.round(pos.y - MM_NODE_H / 2),
       });
       return;
     }
