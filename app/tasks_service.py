@@ -193,7 +193,13 @@ def template_should_spawn(tpl: TaskTemplate, today: date) -> bool:
     return False
 
 
-async def spawn_from_templates(session: AsyncSession, today: date) -> list[Task]:
+async def spawn_from_templates(
+    session: AsyncSession,
+    today: date,
+    *,
+    now_hm: str | None = None,
+) -> list[Task]:
+    """Создаёт задачи из шаблонов только в нужный день и не раньше notify_time."""
     templates = (
         await session.scalars(select(TaskTemplate).where(TaskTemplate.active.is_(True)))
     ).all()
@@ -201,13 +207,17 @@ async def spawn_from_templates(session: AsyncSession, today: date) -> list[Task]
     for tpl in templates:
         if not template_should_spawn(tpl, today):
             continue
+        notify_hm = (tpl.notify_time or "09:00").strip() or "09:00"
+        if now_hm is not None and notify_hm > now_hm:
+            # ещё рано — дождёмся минуты с временем из шаблона
+            continue
         ids = [int(x) for x in (tpl.assignee_ids or "").split(",") if x.strip().isdigit()]
         task = Task(
             title=tpl.title,
             description=tpl.description or "",
             status="todo",
             kind="once",
-            notify_time=tpl.notify_time or "09:00",
+            notify_time=notify_hm,
             due_date=today,
             template_id=tpl.id,
             created_at=datetime.utcnow(),

@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-8" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-9" />
 </head>
 <body>
   <header class="top">
@@ -112,7 +112,7 @@
       <div class="tpl-head">
         <div>
           <h1>Шаблоны задач</h1>
-          <p>Повторяющиеся задачи создаются автоматически по расписанию.</p>
+          <p>Задача приходит только в выбранный день месяца или день недели — в указанное время.</p>
         </div>
         <button type="button" id="btnNewTemplate">+ Шаблон</button>
       </div>
@@ -262,34 +262,43 @@
     <form id="tplForm">
       <h3 id="tplDlgTitle">Шаблон</h3>
       <input type="hidden" name="id" />
+      <input type="hidden" name="recurrence" id="tplRecurrence" value="monthly" />
+      <input type="hidden" name="recurrence_value" id="tplValue" value="1" />
       <label>Название
         <input name="title" required autocomplete="off" />
       </label>
       <label>Описание
         <textarea name="description" rows="2"></textarea>
       </label>
-      <label>Периодичность
-        <select name="recurrence" id="tplRecurrence">
-          <option value="daily">Каждый день</option>
-          <option value="weekly">Каждую неделю</option>
-          <option value="every_n_days">Каждые N дней</option>
-          <option value="monthly">Каждый месяц</option>
-          <option value="weekdays">По выбранным дням недели</option>
-          <option value="month_days">По выбранным числам месяца</option>
-        </select>
-      </label>
-      <label id="tplValueLabel"><span id="tplValueHint">Значение</span>
-        <input name="recurrence_value" id="tplValue" placeholder="например 1,3,5 или 3" />
-      </label>
-      <label>Дата начала
-        <input type="date" name="start_date" />
-      </label>
-      <label>Время уведомления
-        <input name="notify_time" value="09:00" placeholder="09:00" />
-      </label>
+      <fieldset class="tpl-schedule">
+        <legend>Когда приходит задача</legend>
+        <p class="tpl-schedule-hint">Выбери день — задача создастся только тогда, в указанное время.</p>
+        <label>Тип
+          <select id="tplScheduleKind">
+            <option value="month_day">Число месяца</option>
+            <option value="weekday">День недели</option>
+            <option value="daily">Каждый день</option>
+          </select>
+        </label>
+        <div id="tplMonthWrap" class="tpl-pick-wrap">
+          <div class="tpl-pick-label">Числа месяца</div>
+          <div id="tplMonthDays" class="tpl-day-chips"></div>
+        </div>
+        <div id="tplWeekWrap" class="tpl-pick-wrap hidden">
+          <div class="tpl-pick-label">Дни недели</div>
+          <div id="tplWeekDays" class="tpl-day-chips"></div>
+        </div>
+        <label>Время
+          <input name="notify_time" value="10:00" placeholder="10:00" maxlength="5" />
+        </label>
+        <label>Не раньше даты (необязательно)
+          <input type="date" name="start_date" />
+        </label>
+      </fieldset>
       <fieldset class="assignees-box">
-        <legend>Сотрудники</legend>
-        <div id="tplAssigneeChecks" class="check-list"></div>
+        <legend>Кому поставить</legend>
+        <p class="tpl-schedule-hint">По командам и ролям. Можно выбрать всю команду или роль целиком.</p>
+        <div id="tplAssigneeChecks" class="check-list check-list-grouped"></div>
       </fieldset>
       <label class="check-row">
         <input type="checkbox" name="active" checked /> Активен
@@ -302,6 +311,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-8"></script>
+  <script src="/static/app.js?v=pw-9"></script>
 </body>
 </html>

@@ -485,7 +485,7 @@ async def materialize_and_notify(
         await ensure_owner(session, settings.owner_telegram_id)
         from app.tasks_service import spawn_from_templates
 
-        spawned = await spawn_from_templates(session, today)
+        spawned = await spawn_from_templates(session, today, now_hm=hm)
         for task in spawned:
             try:
                 full = (

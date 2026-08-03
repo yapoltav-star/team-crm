@@ -1107,6 +1107,54 @@ body.dlg-open {
   gap: 0.35rem;
 }
 
+.check-list-grouped {
+  max-height: 280px;
+  overflow: auto;
+  gap: 0.65rem;
+  padding-right: 0.15rem;
+}
+
+.check-team {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem 0.55rem;
+  background: var(--bg-soft, transparent);
+}
+
+.check-team-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.check-team-head strong {
+  font-size: 0.88rem;
+}
+
+.check-team-head button,
+.check-role-head button {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+}
+
+.check-role {
+  margin: 0.35rem 0 0.15rem 0.15rem;
+}
+
+.check-role-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: lowercase;
+}
+
 .check-row {
   display: flex;
   align-items: center;
@@ -1114,6 +1162,76 @@ body.dlg-open {
   color: var(--text);
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+.tpl-schedule {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  margin: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.tpl-schedule legend {
+  padding: 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.tpl-schedule-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.tpl-pick-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.tpl-day-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.tpl-day-chips label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text);
+  background: transparent;
+}
+
+.tpl-day-chips label:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
+.tpl-day-chips input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tpl-pick-wrap.hidden {
+  display: none;
 }
 
 .dates-box {

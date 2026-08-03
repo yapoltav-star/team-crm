@@ -16,10 +16,20 @@ const REC_LABELS = {
   daily: "Каждый день",
   weekly: "Каждую неделю",
   every_n_days: "Каждые N дней",
-  monthly: "Каждый месяц",
-  weekdays: "По дням недели",
-  month_days: "По числам месяца",
+  monthly: "Число месяца",
+  weekdays: "Дни недели",
+  month_days: "Числа месяца",
 };
+
+const WEEKDAY_RU = [
+  { v: 1, short: "Пн" },
+  { v: 2, short: "Вт" },
+  { v: 3, short: "Ср" },
+  { v: 4, short: "Чт" },
+  { v: 5, short: "Пт" },
+  { v: 6, short: "Сб" },
+  { v: 7, short: "Вс" },
+];
 
 const JOB_TITLES = [
   "поддержка",
@@ -801,6 +811,35 @@ function renderHome() {
   renderHomeStats();
 }
 
+function formatTemplateSchedule(t) {
+  const time = t.notify_time || "09:00";
+  const rec = t.recurrence || "daily";
+  const val = String(t.recurrence_value || "").trim();
+  if (rec === "daily") return `Каждый день @ ${time}`;
+  if (rec === "monthly" || rec === "month_days") {
+    const days = val
+      ? val
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .join(", ")
+      : "?";
+    return `${days} числа каждого месяца @ ${time}`;
+  }
+  if (rec === "weekdays" || rec === "weekly") {
+    const map = Object.fromEntries(WEEKDAY_RU.map((d) => [d.v, d.short]));
+    const days = val
+      .split(",")
+      .map((x) => Number(x.trim()))
+      .filter((n) => map[n])
+      .map((n) => map[n])
+      .join(", ");
+    return `${days || "день недели"} @ ${time}`;
+  }
+  if (rec === "every_n_days") return `Каждые ${val || "N"} дн. @ ${time}`;
+  return `${REC_LABELS[rec] || rec}${val ? `: ${val}` : ""} @ ${time}`;
+}
+
 function renderTemplates() {
   const list = $("#tplList");
   list.innerHTML = "";
@@ -821,11 +860,8 @@ function renderTemplates() {
       </div>
       ${t.description ? `<p class="desc">${escapeHtml(t.description)}</p>` : ""}
       <div class="meta">
-        <span class="chip">${REC_LABELS[t.recurrence] || t.recurrence}${
-          t.recurrence_value ? `: ${escapeHtml(t.recurrence_value)}` : ""
-        }</span>
+        <span class="chip">${escapeHtml(formatTemplateSchedule(t))}</span>
         ${t.start_date ? `<span class="chip">с ${formatDate(t.start_date)}</span>` : ""}
-        <span class="chip">@ ${escapeHtml(t.notify_time || "09:00")}</span>
         ${names ? `<span class="chip assignee">${escapeHtml(names)}</span>` : ""}
       </div>
     `;
@@ -929,20 +965,127 @@ function resolveAssigneeId(mode) {
   return state.selectedPersonId;
 }
 
-function fillAssigneeChecks(containerId, selectedIds) {
+function employeeTeamName(e) {
+  if (e.role === "owner") return "Владелец";
+  return String(e.team_group || "").trim() || "Без команды";
+}
+
+function employeeRoleName(e) {
+  if (e.role === "owner") return "владелец";
+  return String(e.job_title || "").trim() || "без роли";
+}
+
+function groupEmployeesByTeamRole(list) {
+  const teams = new Map();
+  for (const e of list) {
+    const team = employeeTeamName(e);
+    const role = employeeRoleName(e);
+    if (!teams.has(team)) teams.set(team, new Map());
+    const roles = teams.get(team);
+    if (!roles.has(role)) roles.set(role, []);
+    roles.get(role).push(e);
+  }
+  const teamNames = [...teams.keys()].sort((a, b) => {
+    if (a === "Владелец") return -1;
+    if (b === "Владелец") return 1;
+    if (a === "Без команды") return 1;
+    if (b === "Без команды") return -1;
+    return a.localeCompare(b, "ru");
+  });
+  return teamNames.map((team) => {
+    const rolesMap = teams.get(team);
+    const roleNames = [...rolesMap.keys()].sort((a, b) => {
+      const ai = JOB_TITLE_ORDER[a];
+      const bi = JOB_TITLE_ORDER[b];
+      if (ai != null || bi != null) return (ai ?? 99) - (bi ?? 99);
+      return a.localeCompare(b, "ru");
+    });
+    return {
+      team,
+      roles: roleNames.map((role) => ({
+        role,
+        people: rolesMap.get(role).slice().sort((a, b) => a.name.localeCompare(b.name, "ru")),
+      })),
+    };
+  });
+}
+
+function fillAssigneeChecks(containerId, selectedIds, { grouped = false } = {}) {
   const box = $(containerId);
   const selected = new Set((selectedIds || []).map(Number));
-  const list = isOwner() ? people() : visiblePeople();
-  box.innerHTML = list
-    .map(
-      (e) => `
+  const list = (isOwner() ? people() : visiblePeople()).slice();
+  if (!grouped) {
+    box.innerHTML = list
+      .map(
+        (e) => `
       <label class="check-row">
         <input type="checkbox" value="${e.id}" ${selected.has(e.id) ? "checked" : ""} />
         <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
         ${escapeHtml(e.name)}
       </label>`
-    )
+      )
+      .join("");
+    return;
+  }
+
+  const groups = groupEmployeesByTeamRole(list);
+  if (!groups.length) {
+    box.innerHTML = `<div class="chat-empty">Нет сотрудников</div>`;
+    return;
+  }
+  box.innerHTML = groups
+    .map((g) => {
+      const teamIds = g.roles.flatMap((r) => r.people.map((p) => p.id));
+      const rolesHtml = g.roles
+        .map((r) => {
+          const roleIds = r.people.map((p) => p.id);
+          const peopleHtml = r.people
+            .map(
+              (e) => `
+            <label class="check-row">
+              <input type="checkbox" value="${e.id}" ${selected.has(e.id) ? "checked" : ""} />
+              <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
+              ${escapeHtml(e.name)}
+            </label>`
+            )
+            .join("");
+          return `
+          <div class="check-role">
+            <div class="check-role-head">
+              <span>${escapeHtml(r.role)}</span>
+              <button type="button" class="ghost" data-select-ids="${roleIds.join(",")}">все</button>
+            </div>
+            ${peopleHtml}
+          </div>`;
+        })
+        .join("");
+      return `
+      <div class="check-team" data-team="${escapeHtml(g.team)}">
+        <div class="check-team-head">
+          <strong>${escapeHtml(g.team)}</strong>
+          <button type="button" class="ghost" data-select-ids="${teamIds.join(",")}">вся команда</button>
+        </div>
+        ${rolesHtml}
+      </div>`;
+    })
     .join("");
+
+  box.querySelectorAll("[data-select-ids]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ids = String(btn.dataset.selectIds || "")
+        .split(",")
+        .map(Number)
+        .filter(Boolean);
+      const checks = [...box.querySelectorAll('input[type="checkbox"]')];
+      const targets = checks.filter((c) => ids.includes(Number(c.value)));
+      const allOn = targets.length && targets.every((c) => c.checked);
+      targets.forEach((c) => {
+        c.checked = !allOn;
+      });
+    });
+  });
 }
 
 function readAssigneeChecks(containerId) {
@@ -1054,38 +1197,117 @@ async function deleteTask(task) {
   await load();
 }
 
-function updateTplValueHint() {
-  const rec = $("#tplRecurrence").value;
-  const label = $("#tplValueLabel");
-  const input = $("#tplValue");
-  const hints = {
-    daily: ["Не нужно", ""],
-    weekly: ["День недели (1=пн … 7=вс)", "1"],
-    every_n_days: ["Каждые N дней", "3"],
-    monthly: ["Число месяца", "1"],
-    weekdays: ["Дни недели через запятую", "1,3,5"],
-    month_days: ["Числа месяца через запятую", "1,15"],
-  };
-  const [text, ph] = hints[rec] || ["Значение", ""];
-  $("#tplValueHint").textContent = text;
-  input.placeholder = ph;
-  input.disabled = rec === "daily";
-  if (rec === "daily") input.value = "";
+function parseCsvInts(val) {
+  return String(val || "")
+    .split(",")
+    .map((x) => Number(String(x).trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+function ensureTplDayChips() {
+  const month = $("#tplMonthDays");
+  const week = $("#tplWeekDays");
+  if (month && !month.dataset.ready) {
+    month.innerHTML = Array.from({ length: 31 }, (_, i) => i + 1)
+      .map(
+        (d) =>
+          `<label><input type="checkbox" value="${d}" /><span>${d}</span></label>`
+      )
+      .join("");
+    month.dataset.ready = "1";
+  }
+  if (week && !week.dataset.ready) {
+    week.innerHTML = WEEKDAY_RU.map(
+      (d) =>
+        `<label><input type="checkbox" value="${d.v}" /><span>${d.short}</span></label>`
+    ).join("");
+    week.dataset.ready = "1";
+  }
+}
+
+function setTplChipValues(containerId, values) {
+  const set = new Set((values || []).map(Number));
+  document.querySelectorAll(`${containerId} input[type=checkbox]`).forEach((el) => {
+    el.checked = set.has(Number(el.value));
+  });
+}
+
+function readTplChipValues(containerId) {
+  return [...document.querySelectorAll(`${containerId} input[type=checkbox]:checked`)]
+    .map((el) => Number(el.value))
+    .filter((n) => n > 0)
+    .sort((a, b) => a - b);
+}
+
+function tplScheduleKindFromRecurrence(rec) {
+  if (rec === "weekdays" || rec === "weekly") return "weekday";
+  if (rec === "daily" || rec === "every_n_days") return "daily";
+  return "month_day";
+}
+
+function syncTplScheduleUi() {
+  const kind = $("#tplScheduleKind")?.value || "month_day";
+  $("#tplMonthWrap")?.classList.toggle("hidden", kind !== "month_day");
+  $("#tplWeekWrap")?.classList.toggle("hidden", kind !== "weekday");
+}
+
+function applyTplScheduleToForm() {
+  const kind = $("#tplScheduleKind")?.value || "month_day";
+  const recEl = $("#tplRecurrence");
+  const valEl = $("#tplValue");
+  if (!recEl || !valEl) return;
+  if (kind === "daily") {
+    recEl.value = "daily";
+    valEl.value = "";
+    return;
+  }
+  if (kind === "weekday") {
+    const days = readTplChipValues("#tplWeekDays");
+    recEl.value = "weekdays";
+    valEl.value = (days.length ? days : [1]).join(",");
+    return;
+  }
+  const days = readTplChipValues("#tplMonthDays");
+  const picked = days.length ? days : [1];
+  if (picked.length === 1) {
+    recEl.value = "monthly";
+    valEl.value = String(picked[0]);
+  } else {
+    recEl.value = "month_days";
+    valEl.value = picked.join(",");
+  }
 }
 
 function openTemplateDialog(tpl) {
   const form = $("#tplForm");
+  ensureTplDayChips();
   $("#tplDlgTitle").textContent = tpl ? `Шаблон #${tpl.id}` : "Новый шаблон";
   form.elements.id.value = tpl?.id || "";
   form.elements.title.value = tpl?.title || "";
   form.elements.description.value = tpl?.description || "";
-  form.elements.recurrence.value = tpl?.recurrence || "daily";
-  form.elements.recurrence_value.value = tpl?.recurrence_value || "";
   form.elements.start_date.value = tpl?.start_date || "";
-  form.elements.notify_time.value = tpl?.notify_time || "09:00";
+  form.elements.notify_time.value = tpl?.notify_time || "10:00";
   form.elements.active.checked = tpl ? !!tpl.active : true;
-  fillAssigneeChecks("#tplAssigneeChecks", tpl?.assignee_ids || []);
-  updateTplValueHint();
+
+  const rec = tpl?.recurrence || "monthly";
+  const val = tpl?.recurrence_value || (rec === "monthly" ? "1" : "");
+  form.elements.recurrence.value = rec;
+  form.elements.recurrence_value.value = val;
+
+  const kind = tplScheduleKindFromRecurrence(rec);
+  $("#tplScheduleKind").value = kind;
+  if (kind === "weekday") {
+    setTplChipValues("#tplWeekDays", parseCsvInts(val).length ? parseCsvInts(val) : [1]);
+    setTplChipValues("#tplMonthDays", []);
+  } else if (kind === "month_day") {
+    setTplChipValues("#tplMonthDays", parseCsvInts(val).length ? parseCsvInts(val) : [1]);
+    setTplChipValues("#tplWeekDays", []);
+  } else {
+    setTplChipValues("#tplMonthDays", []);
+    setTplChipValues("#tplWeekDays", []);
+  }
+  syncTplScheduleUi();
+  fillAssigneeChecks("#tplAssigneeChecks", tpl?.assignee_ids || [], { grouped: true });
   $("#tplDelete").classList.toggle("hidden", !tpl?.id);
   $("#tplDlg").showModal();
 }
@@ -1452,7 +1674,7 @@ $("#btnComment").addEventListener("click", async () => {
 
 $("#btnNewTemplate").addEventListener("click", () => openTemplateDialog(null));
 $("#tplCancel").addEventListener("click", () => $("#tplDlg").close());
-$("#tplRecurrence").addEventListener("change", updateTplValueHint);
+$("#tplScheduleKind")?.addEventListener("change", syncTplScheduleUi);
 
 $("#tplDelete").addEventListener("click", async () => {
   const id = Number($("#tplForm").elements.id.value);
@@ -1466,15 +1688,41 @@ $("#tplForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = e.target;
   const id = Number(form.elements.id.value) || null;
+  applyTplScheduleToForm();
+  const kind = $("#tplScheduleKind")?.value || "month_day";
+  if (kind === "month_day" && !readTplChipValues("#tplMonthDays").length) {
+    alert("Выбери хотя бы одно число месяца");
+    return;
+  }
+  if (kind === "weekday" && !readTplChipValues("#tplWeekDays").length) {
+    alert("Выбери хотя бы один день недели");
+    return;
+  }
+  const time = String(form.elements.notify_time.value || "").trim();
+  if (!/^\d{1,2}:\d{2}$/.test(time)) {
+    alert("Время в формате ЧЧ:ММ, например 10:00");
+    return;
+  }
+  const [hh, mm] = time.split(":").map(Number);
+  if (hh > 23 || mm > 59) {
+    alert("Некорректное время");
+    return;
+  }
+  const notify_time = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+  const assignee_ids = readAssigneeChecks("#tplAssigneeChecks");
+  if (!assignee_ids.length) {
+    alert("Выбери хотя бы одного сотрудника");
+    return;
+  }
   const payload = {
     title: String(form.elements.title.value || "").trim(),
     description: String(form.elements.description.value || ""),
     recurrence: form.elements.recurrence.value,
     recurrence_value: String(form.elements.recurrence_value.value || "").trim(),
     start_date: form.elements.start_date.value || null,
-    notify_time: String(form.elements.notify_time.value || "09:00").trim() || "09:00",
+    notify_time,
     active: !!form.elements.active.checked,
-    assignee_ids: readAssigneeChecks("#tplAssigneeChecks"),
+    assignee_ids,
   };
   if (!payload.title) {
     alert("Нужно название");
