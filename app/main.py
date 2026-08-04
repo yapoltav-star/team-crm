@@ -78,6 +78,7 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     app.state.dp = dp
     app.state.last_stock_watch = None
+    app.state.last_shelf_watch = None
 
     if settings.stock_watch_enabled and settings.wb_dashboard_url:
         from apscheduler.triggers.cron import CronTrigger
@@ -119,6 +120,48 @@ async def lifespan(app: FastAPI):
             mm,
             settings.tz_name,
             settings.stock_cooldown_days,
+        )
+
+    if settings.shelf_watch_enabled and settings.wb_dashboard_url:
+        from apscheduler.triggers.cron import CronTrigger
+
+        from app.shelf_watch import run_shelf_watch
+
+        async def shelf_tick() -> None:
+            result = await run_shelf_watch(
+                session_factory=SessionLocal,
+                settings=settings,
+                bot=getattr(app.state, "bot", None),
+            )
+            app.state.last_shelf_watch = result
+            logger.info("shelf_watch: %s", result)
+
+        raw_time = (settings.shelf_watch_time or "10:00").strip()
+        try:
+            hh, mm = [int(x) for x in raw_time.split(":")[:2]]
+        except Exception:  # noqa: BLE001
+            hh, mm = 10, 0
+        days = (settings.shelf_watch_days or "tue,thu").strip() or "tue,thu"
+        scheduler.add_job(
+            shelf_tick,
+            CronTrigger(
+                day_of_week=days,
+                hour=hh,
+                minute=mm,
+                timezone=settings.tz_name,
+            ),
+            id="shelf_watch",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info(
+            "Shelf watch enabled → mine<%s%% on %s at %02d:%02d (%s), cooldown %sd",
+            settings.shelf_min_mine_pct,
+            days,
+            hh,
+            mm,
+            settings.tz_name,
+            settings.shelf_cooldown_days,
         )
 
     scheduler.start()

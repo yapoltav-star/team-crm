@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # устаревший авто-вход без одобрения (по умолчанию выкл — заявка владельцу)
     allow_self_join: bool = Field(default=False, alias="ALLOW_SELF_JOIN")
 
-    # Связка с WB Dashboard — пока только «Наш склад»
+    # Связка с WB Dashboard — «Наш склад» + «Полки у моих»
     wb_dashboard_url: str = Field(
         default="https://wb-dashboard-production-baf4.up.railway.app",
         alias="WB_DASHBOARD_URL",
@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     # кому ставить задачи; 0 = владельцу
     stock_assignee_telegram_id: int = Field(default=0, alias="STOCK_ASSIGNEE_TELEGRAM_ID")
 
+    # Полки у моих карточек: доля своих в топ-15 < порога → задача
+    shelf_watch_enabled: bool = Field(default=True, alias="SHELF_WATCH_ENABLED")
+    shelf_watch_days: str = Field(default="tue,thu", alias="SHELF_WATCH_DAYS")
+    shelf_watch_time: str = Field(default="10:00", alias="SHELF_WATCH_TIME")
+    shelf_cooldown_days: int = Field(default=7, alias="SHELF_COOLDOWN_DAYS")
+    shelf_min_mine_pct: float = Field(default=60.0, alias="SHELF_MIN_MINE_PCT")
+    shelf_min_orders: int = Field(default=1, alias="SHELF_MIN_ORDERS")
+    shelf_max_tasks: int = Field(default=15, alias="SHELF_MAX_TASKS")
+    shelf_dest: int = Field(default=-1257786, alias="SHELF_DEST")  # Москва
+    shelf_request_delay_sec: float = Field(default=0.6, alias="SHELF_REQUEST_DELAY_SEC")
+    shelf_assignee_telegram_id: int = Field(default=0, alias="SHELF_ASSIGNEE_TELEGRAM_ID")
+
     @field_validator(
         "telegram_proxy",
         "database_url",
@@ -57,6 +69,8 @@ class Settings(BaseSettings):
         "wb_dashboard_url",
         "stock_watch_days",
         "stock_watch_time",
+        "shelf_watch_days",
+        "shelf_watch_time",
         "digest_morning_time",
         "digest_evening_time",
         mode="before",
@@ -70,6 +84,7 @@ class Settings(BaseSettings):
     @field_validator(
         "allow_self_join",
         "stock_watch_enabled",
+        "shelf_watch_enabled",
         "stock_require_buyouts",
         "digest_enabled",
         mode="before",

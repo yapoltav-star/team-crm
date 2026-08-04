@@ -856,6 +856,20 @@ async def stock_watch_run(request: Request) -> dict:
     )
 
 
+@router.post("/shelf-watch/run")
+async def shelf_watch_run(request: Request) -> dict:
+    """Ручной запуск проверки полок своих карточек → автозадачи."""
+    from app.shelf_watch import run_shelf_watch
+
+    settings = get_settings()
+    bot = getattr(request.app.state, "bot", None)
+    return await run_shelf_watch(
+        session_factory=SessionLocal,
+        settings=settings,
+        bot=bot,
+    )
+
+
 @router.post("/digest/run")
 async def digest_run(
     request: Request,

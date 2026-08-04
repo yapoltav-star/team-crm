@@ -69,4 +69,22 @@ Variables:
 
 Ручной запуск: `POST /api/stock-watch/run` (с `x-crm-password` если задан).
 
+### Полки у моих карточек
+
+Правило: у карточки с продажами в топ-15 полки «Смотрите также» доля своих
+(бренд PVS / свои nm) **&lt; `SHELF_MIN_MINE_PCT`** (по умолчанию 60%) → задача в CRM.
+
+Расписание: **Вт / Чт** в `SHELF_WATCH_TIME` (по умолчанию 10:00 МСК).
+Повтор по тому же nm — не раньше `SHELF_COOLDOWN_DAYS` (7).
+
+Variables:
+- `SHELF_WATCH_ENABLED=true`
+- `SHELF_WATCH_DAYS=tue,thu`
+- `SHELF_WATCH_TIME=10:00`
+- `SHELF_MIN_MINE_PCT=60`
+- `SHELF_MAX_TASKS=15`
+- `SHELF_ASSIGNEE_TELEGRAM_ID` — кому (0 = владелец / как у склада)
+
+Ручной запуск: `POST /api/shelf-watch/run` (с `x-crm-password` если задан).
+
 Склады WB по регионам — позже отдельной задачей.
