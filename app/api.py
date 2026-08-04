@@ -78,14 +78,33 @@ async def _employee_out(session: AsyncSession, emp: Employee) -> EmployeeOut:
     )
 
 
+def _norm_job_title(value: str | None) -> str:
+    return (value or "").strip().lower().replace("ё", "е")
+
+
 async def _visible_subject_ids(
     session: AsyncSession, viewer: Employee
 ) -> set[int] | None:
-    """None = все (владелец). Иначе id сотрудников, чьи задачи видны."""
+    """None = все (владелец). Иначе id сотрудников, чьи задачи видны.
+
+    Партнёр в проекте видит всех людей своей команды (team_group).
+    """
     if viewer.role == "owner":
         return None
     granted = await _can_see_ids(session, viewer.id)
-    return {viewer.id, *granted}
+    ids: set[int] = {viewer.id, *granted}
+    team = (viewer.team_group or "").strip()
+    if _norm_job_title(viewer.job_title) == "партнер" and team:
+        teammates = (
+            await session.scalars(
+                select(Employee.id).where(
+                    Employee.active.is_(True),
+                    Employee.team_group == team,
+                )
+            )
+        ).all()
+        ids.update(int(x) for x in teammates)
+    return ids
 
 
 def _task_matches_subjects(task: Task, subject_ids: set[int]) -> bool:

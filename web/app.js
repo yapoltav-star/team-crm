@@ -262,11 +262,30 @@ function isOwner() {
   return me()?.role === "owner";
 }
 
+function isPartner() {
+  const t = String(me()?.job_title || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("ё", "е");
+  return t === "партнер";
+}
+
 function visiblePeople() {
   const all = people();
   if (isOwner()) return all;
   const m = me();
   if (!m) return [];
+  // партнёр видит всех в своём проекте (слева и их задачи)
+  if (isPartner()) {
+    const team = String(m.team_group || "").trim();
+    if (team) {
+      return all.filter(
+        (e) =>
+          e.id === m.id ||
+          (e.role !== "owner" && String(e.team_group || "").trim() === team)
+      );
+    }
+  }
   const allowed = new Set([m.id, ...(m.can_see_ids || [])]);
   return all.filter((e) => allowed.has(e.id));
 }
