@@ -132,6 +132,12 @@ class TaskPatch(BaseModel):
     actor_id: int | None = None
 
 
+class TaskReassignIn(BaseModel):
+    assignee_id: int
+    actor_id: int | None = None
+    notify: bool = True
+
+
 class TaskOut(BaseModel):
     id: int
     title: str

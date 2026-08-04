@@ -213,12 +213,12 @@ async def run_shelf_watch(
         if not owner:
             return {"ok": False, "error": "владелец не найден в CRM", **meta}
 
+        # по умолчанию всегда владельцу; чужой ID — только если явно задан SHELF_ASSIGNEE
         assignee = owner
-        assignee_tg = settings.shelf_assignee_telegram_id or settings.stock_assignee_telegram_id
-        if assignee_tg:
+        if settings.shelf_assignee_telegram_id:
             emp = await session.scalar(
                 select(Employee).where(
-                    Employee.telegram_id == int(assignee_tg),
+                    Employee.telegram_id == int(settings.shelf_assignee_telegram_id),
                     Employee.active.is_(True),
                 )
             )

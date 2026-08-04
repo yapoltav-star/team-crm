@@ -1088,6 +1088,53 @@ body.dlg-open {
   color: var(--muted);
 }
 
+.reassign-bar {
+  margin: 0.2rem 0 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, #2563eb) 6%, transparent);
+}
+
+.reassign-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.45rem;
+}
+
+.reassign-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.reassign-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--line);
+  background: var(--card, #fff);
+  color: inherit;
+  border-radius: 999px;
+  padding: 0.28rem 0.65rem 0.28rem 0.35rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.reassign-btn:hover {
+  border-color: var(--accent, #2563eb);
+  background: color-mix(in srgb, var(--accent, #2563eb) 10%, transparent);
+}
+
+.reassign-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .assignees-box {
   border: 1px solid var(--line);
   border-radius: 10px;

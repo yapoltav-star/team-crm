@@ -16,9 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 def task_action_kb(
-    run_id: int, task_id: int, *, status: str = "todo"
+    run_id: int,
+    task_id: int,
+    *,
+    status: str = "todo",
+    can_reassign: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Кнопки статуса: В работе / Сделано + комментарий."""
+    """Кнопки статуса: В работе / Сделано + комментарий (+ перекинуть)."""
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     if status != "doing" and status != "done":
@@ -46,8 +50,45 @@ def task_action_kb(
                 )
             ]
         )
+    if can_reassign and status != "done":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="👤 Перекинуть менеджеру",
+                    callback_data=f"ra:pick:{task_id}",
+                )
+            ]
+        )
     if not rows:
         return InlineKeyboardMarkup(inline_keyboard=[])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def reassign_pick_kb(task_id: int, managers: list[Employee]) -> InlineKeyboardMarkup:
+    """Список менеджеров для быстрой передачи задачи."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for emp in managers[:12]:
+        label = (emp.name or f"#{emp.id}")[:28]
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"ra:do:{task_id}:{emp.id}",
+            )
+        )
+        if len(row) >= 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← Назад",
+                callback_data=f"ra:back:{task_id}",
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -154,6 +195,11 @@ async def notify_task_assignee(
         "Жми «В работе», «Сделано» или «Комментарий»."
     )
 
+    from app.config import get_settings
+
+    settings = get_settings()
+    owner_tg = int(settings.owner_telegram_id or 0)
+
     errors: list[str] = []
     sent = 0
     for emp in targets:
@@ -161,10 +207,16 @@ async def notify_task_assignee(
             errors.append(f"{emp.name}: нет Telegram id")
             continue
         try:
+            is_owner = owner_tg and int(emp.telegram_id) == owner_tg
             await bot.send_message(
                 int(emp.telegram_id),
                 text,
-                reply_markup=task_action_kb(int(run.id), int(task.id), status=task.status or "todo"),
+                reply_markup=task_action_kb(
+                    int(run.id),
+                    int(task.id),
+                    status=task.status or "todo",
+                    can_reassign=bool(is_owner),
+                ),
                 parse_mode="HTML",
             )
             sent += 1

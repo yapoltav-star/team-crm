@@ -607,8 +607,13 @@ function renderManagerBar() {
 function cardDisplayDescription(raw) {
   const s = String(raw || "").trim();
   if (!s) return "";
-  // автозадачи по складу — на карточке без техтекста
-  if (/\[auto:own-stock:/i.test(s) || /Автозадача:\s*остаток/i.test(s)) return "";
+  // автозадачи — на карточке без техтекста
+  if (
+    /\[auto:own-stock:/i.test(s) ||
+    /\[auto:my-shelf:/i.test(s) ||
+    /Автозадача:\s*остаток/i.test(s)
+  )
+    return "";
   return s;
 }
 
@@ -1184,7 +1189,10 @@ async function openTaskDialog(taskId) {
   form.elements.articles.value = task.articles || "";
   form.elements.description.value = cardDisplayDescription(task.description);
   form.dataset.autoMarker =
-    (/\[auto:own-stock:[^\]]+\]/i.exec(String(task.description || "")) || [])[0] || "";
+    (
+      /\[auto:(?:own-stock|my-shelf):[^\]]+\]/i.exec(String(task.description || "")) ||
+      []
+    )[0] || "";
   form.elements.status.value = task.status || "todo";
   form.elements.due_date.value = task.due_date || "";
   const project = form.elements.project_id;
@@ -1197,6 +1205,7 @@ async function openTaskDialog(taskId) {
       )
       .join("");
   fillAssigneeChecks("#assigneeChecks", taskAssigneeIds(task));
+  renderReassignButtons(task);
   renderDatesBox(task);
   renderComments(task);
   renderEvents(task);
@@ -1206,6 +1215,60 @@ async function openTaskDialog(taskId) {
   dlg.showModal();
   const grid = dlg.querySelector(".drawer-grid");
   if (grid) grid.scrollTop = 0;
+}
+
+function managersForReassign(task) {
+  const current = new Set(taskAssigneeIds(task));
+  return people().filter(
+    (e) =>
+      e.active !== false &&
+      e.role !== "owner" &&
+      !current.has(Number(e.id))
+  );
+}
+
+function renderReassignButtons(task) {
+  const bar = $("#reassignBar");
+  const box = $("#reassignButtons");
+  if (!bar || !box) return;
+  const managers = managersForReassign(task);
+  if (!managers.length) {
+    bar.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  bar.classList.remove("hidden");
+  box.innerHTML = managers
+    .map(
+      (e) =>
+        `<button type="button" class="reassign-btn" data-reassign-id="${e.id}" title="Перекинуть на ${escapeHtml(e.name)}">
+          <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
+          ${escapeHtml(e.name)}
+        </button>`
+    )
+    .join("");
+  box.querySelectorAll("[data-reassign-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const empId = Number(btn.getAttribute("data-reassign-id"));
+      if (!empId || !task?.id) return;
+      btn.disabled = true;
+      try {
+        await api(`/api/tasks/${task.id}/reassign`, {
+          method: "POST",
+          body: JSON.stringify({
+            assignee_id: empId,
+            actor_id: state.meId || null,
+            notify: true,
+          }),
+        });
+        await openTaskDialog(task.id);
+        await load();
+      } catch (err) {
+        alert(err.message || String(err));
+        btn.disabled = false;
+      }
+    });
+  });
 }
 
 async function deleteTask(task) {

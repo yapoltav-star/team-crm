@@ -40,6 +40,7 @@ from app.notify import (
     ensure_run,
     notify_task_assignee,
     notify_task_comment,
+    reassign_pick_kb,
     resolve_run,
     save_task_comment,
     task_action_kb,
@@ -1215,7 +1216,10 @@ def build_dispatcher(
                         "Жми «Сделано», когда закончишь.",
                         parse_mode="HTML",
                         reply_markup=task_action_kb(
-                            run_id_final, task_id_final, status="doing"
+                            run_id_final,
+                            task_id_final,
+                            status="doing",
+                            can_reassign=uid == int(settings.owner_telegram_id),
                         ),
                     )
                 except Exception:  # noqa: BLE001
@@ -1242,6 +1246,151 @@ def build_dispatcher(
                 continue
             try:
                 await callback.bot.send_message(tid, f"✅ {name} сделал(а): {title}")
+            except Exception:  # noqa: BLE001
+                pass
+
+    @dp.callback_query(F.data.startswith("ra:"))
+    async def on_reassign(callback: CallbackQuery) -> None:
+        """Владелец: перекинуть задачу на менеджера одной кнопкой."""
+        if not callback.data or not callback.from_user:
+            return
+        if int(callback.from_user.id) != int(settings.owner_telegram_id):
+            await callback.answer("Только владелец может перекидывать", show_alert=True)
+            return
+        parts = callback.data.split(":")
+        # ra:pick:{task_id} | ra:back:{task_id} | ra:do:{task_id}:{emp_id}
+        if len(parts) < 3:
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        action = parts[1]
+        try:
+            task_id = int(parts[2])
+        except ValueError:
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+
+        async with session_factory() as session:
+            task = await session.get(
+                Task,
+                task_id,
+                options=(
+                    selectinload(Task.assignee),
+                    selectinload(Task.created_by),
+                    selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+                ),
+            )
+            if not task or not task.active:
+                await callback.answer("Задача не найдена", show_alert=True)
+                return
+
+            if action in {"pick", "back"}:
+                if action == "pick":
+                    managers = (
+                        await session.scalars(
+                            select(Employee)
+                            .where(
+                                Employee.active.is_(True),
+                                Employee.role != "owner",
+                            )
+                            .order_by(Employee.name.asc())
+                        )
+                    ).all()
+                    if not managers:
+                        await callback.answer("Нет менеджеров в команде", show_alert=True)
+                        return
+                    await callback.answer()
+                    if callback.message:
+                        try:
+                            await callback.message.edit_reply_markup(
+                                reply_markup=reassign_pick_kb(task_id, list(managers))
+                            )
+                        except Exception:  # noqa: BLE001
+                            await callback.message.answer(
+                                "Кому перекинуть?",
+                                reply_markup=reassign_pick_kb(task_id, list(managers)),
+                            )
+                    return
+
+                # back → вернуть обычные кнопки
+                due = task.due_date or datetime.now(settings.tz).date()
+                run = await ensure_run(session, task.id, due)
+                await callback.answer()
+                if callback.message:
+                    try:
+                        await callback.message.edit_reply_markup(
+                            reply_markup=task_action_kb(
+                                int(run.id),
+                                int(task.id),
+                                status=task.status or "todo",
+                                can_reassign=True,
+                            )
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                return
+
+            if action != "do" or len(parts) < 4:
+                await callback.answer("Битая кнопка", show_alert=True)
+                return
+            try:
+                emp_id = int(parts[3])
+            except ValueError:
+                await callback.answer("Битая кнопка", show_alert=True)
+                return
+
+            emp = await session.get(Employee, emp_id)
+            if not emp or not emp.active or emp.role == "owner":
+                await callback.answer("Менеджер не найден", show_alert=True)
+                return
+
+            from app.tasks_service import add_event, set_assignees
+
+            actor = await find_employee(session, int(callback.from_user.id))
+            await set_assignees(
+                session,
+                task,
+                [emp.id],
+                actor_id=actor.id if actor else None,
+                log=True,
+            )
+            await add_event(
+                session,
+                task.id,
+                f"Перекинули → {emp.name}",
+                kind="reassign",
+                actor_id=actor.id if actor else None,
+            )
+            await session.commit()
+            task = (
+                await session.scalars(
+                    select(Task)
+                    .where(Task.id == task_id)
+                    .options(
+                        selectinload(Task.assignee),
+                        selectinload(Task.created_by),
+                        selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+                    )
+                )
+            ).one()
+            due = task.due_date or datetime.now(settings.tz).date()
+            notified, nerr = await notify_task_assignee(
+                bot=callback.bot,
+                session=session,
+                task=task,
+                due=due,
+                employees=[emp],
+            )
+
+        await callback.answer(f"→ {emp.name}")
+        if callback.message:
+            try:
+                await callback.message.edit_text(
+                    f"👤 Перекинул(а) на <b>{emp.name}</b>\n"
+                    f"<b>{task.title}</b>"
+                    + (f"\nАртикул: <code>{task.articles}</code>" if task.articles else "")
+                    + ("" if notified else f"\n⚠ Не уведомили: {nerr or 'ошибка'}"),
+                    parse_mode="HTML",
+                )
             except Exception:  # noqa: BLE001
                 pass
 

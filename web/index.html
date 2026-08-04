@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-10" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-11" />
 </head>
 <body>
   <header class="top">
@@ -169,6 +169,11 @@
               <option value="">Без проекта</option>
             </select>
           </label>
+          <div id="reassignBar" class="reassign-bar">
+            <div class="reassign-label">Перекинуть менеджеру</div>
+            <div id="reassignButtons" class="reassign-btns"></div>
+          </div>
+
           <fieldset class="assignees-box">
             <legend>Исполнители</legend>
             <div id="assigneeChecks" class="check-list"></div>

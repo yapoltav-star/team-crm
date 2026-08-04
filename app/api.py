@@ -37,6 +37,7 @@ from app.schemas import (
     TaskIn,
     TaskOut,
     TaskPatch,
+    TaskReassignIn,
     TeamGroupIn,
     TemplateIn,
     TemplateOut,
@@ -636,6 +637,56 @@ async def patch_task(
 
     await session.commit()
     task = await load_task_full(session, task_id)
+    return _task_out(task, today=today, with_thread=True)
+
+
+@router.post("/tasks/{task_id}/reassign", response_model=TaskOut)
+async def reassign_task(
+    task_id: int,
+    body: TaskReassignIn,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> TaskOut:
+    """Быстро перекинуть задачу на одного исполнителя (+ уведомить в Telegram)."""
+    settings = get_settings()
+    today = datetime.now(settings.tz).date()
+    task = await session.get(Task, task_id)
+    if not task or not task.active:
+        raise HTTPException(404, "Task not found")
+    emp = await session.get(Employee, int(body.assignee_id))
+    if not emp or not emp.active:
+        raise HTTPException(404, "Сотрудник не найден")
+
+    task = await load_task_full(session, task_id)
+    await set_assignees(
+        session,
+        task,
+        [emp.id],
+        actor_id=body.actor_id,
+        log=True,
+    )
+    await add_event(
+        session,
+        task_id,
+        f"Перекинули → {emp.name}",
+        kind="reassign",
+        actor_id=body.actor_id,
+    )
+    await session.commit()
+    task = await load_task_full(session, task_id)
+
+    if body.notify:
+        bot = getattr(request.app.state, "bot", None)
+        due = task.due_date or today
+        await notify_task_assignee(
+            bot=bot,
+            session=session,
+            task=task,
+            due=due,
+            employees=[emp],
+        )
+        task = await load_task_full(session, task_id)
+
     return _task_out(task, today=today, with_thread=True)
 
 
