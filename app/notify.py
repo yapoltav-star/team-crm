@@ -103,6 +103,26 @@ def ask_comment_kb(task_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def my_tasks_done_kb(
+    tasks: list[Task], *, list_owner_id: int
+) -> InlineKeyboardMarkup:
+    """Кнопки «Выполнено» для списка задач человека."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for t in tasks[:20]:
+        label = (t.title or f"#{t.id}").strip()
+        if len(label) > 34:
+            label = label[:33] + "…"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"✅ {label}",
+                    callback_data=f"mydone:{t.id}:{int(list_owner_id)}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def theme_pick_kb(
     task_id: int,
     themes: list,

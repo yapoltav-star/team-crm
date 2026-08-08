@@ -38,6 +38,7 @@ from app.notify import (
     ask_comment_kb,
     confirm_task_kb,
     ensure_run,
+    my_tasks_done_kb,
     notify_task_assignee,
     notify_task_comment,
     reassign_pick_kb,
@@ -406,6 +407,43 @@ async def _after_task_created_comment(
 STATUS_RU = {"todo": "новая", "doing": "в работе", "done": "выполнено"}
 
 
+async def load_open_tasks_for(
+    session: AsyncSession, assignee: Employee
+) -> list[Task]:
+    q = (
+        select(Task)
+        .where(Task.active.is_(True), Task.status != "done")
+        .options(
+            selectinload(Task.assignee),
+            selectinload(Task.created_by),
+            selectinload(Task.assignees),
+            selectinload(Task.theme),
+        )
+        .order_by(Task.status, Task.id)
+    )
+    tasks = (await session.scalars(q)).all()
+    return [
+        t
+        for t in tasks
+        if t.assignee_id == assignee.id
+        or any(a.employee_id == assignee.id for a in (t.assignees or []))
+    ]
+
+
+def format_person_tasks_text(assignee: Employee, tasks: list[Task]) -> str:
+    if not tasks:
+        return f"У {assignee.name} открытых задач нет."
+    lines = [f"Задачи — {assignee.name} ({len(tasks)}):", "Нажми ✅ чтобы отметить выполненной."]
+    for t in tasks:
+        st = STATUS_RU.get(t.status, t.status)
+        author = f" (от {t.created_by.name})" if t.created_by else ""
+        theme = f" · {t.theme.title}" if getattr(t, "theme", None) else ""
+        lines.append(f"• #{t.id} {t.title} — {st}{theme}{author}")
+    if len(tasks) > 20:
+        lines.append(f"\n…и ещё {len(tasks) - 20}, кнопки на первые 20.")
+    return "\n".join(lines)
+
+
 async def format_open_tasks(
     session: AsyncSession,
     *,
@@ -413,6 +451,10 @@ async def format_open_tasks(
     assignee: Employee | None = None,
 ) -> str:
     """Open tasks for one person or the whole team."""
+    if assignee is not None:
+        tasks = await load_open_tasks_for(session, assignee)
+        return format_person_tasks_text(assignee, tasks)
+
     q = (
         select(Task)
         .where(Task.active.is_(True), Task.status != "done")
@@ -424,22 +466,6 @@ async def format_open_tasks(
         .order_by(Task.status, Task.id)
     )
     tasks = (await session.scalars(q)).all()
-    if assignee is not None:
-        tasks = [
-            t
-            for t in tasks
-            if t.assignee_id == assignee.id
-            or any(a.employee_id == assignee.id for a in (t.assignees or []))
-        ]
-    if assignee is not None:
-        if not tasks:
-            return f"У {assignee.name} открытых задач нет."
-        lines = [f"Задачи — {assignee.name}:"]
-        for t in tasks:
-            st = STATUS_RU.get(t.status, t.status)
-            author = f" (от {t.created_by.name})" if t.created_by else ""
-            lines.append(f"• {t.title} — {st}{author}")
-        return "\n".join(lines)
 
     team = people or []
     by_id: dict[int, list[Task]] = {}
@@ -855,6 +881,26 @@ def build_dispatcher(
                 return
             await _reply_task_for_confirm(message, task)
 
+    async def _send_my_tasks(
+        *,
+        message: Message | None = None,
+        edit_message: Message | None = None,
+        assignee: Employee,
+        session: AsyncSession,
+    ) -> None:
+        tasks = await load_open_tasks_for(session, assignee)
+        text = format_person_tasks_text(assignee, tasks)
+        kb = my_tasks_done_kb(tasks, list_owner_id=assignee.id) if tasks else None
+        if edit_message is not None:
+            try:
+                await edit_message.edit_text(text, reply_markup=kb)
+            except Exception:  # noqa: BLE001
+                if message:
+                    await message.answer(text, reply_markup=kb)
+            return
+        if message:
+            await message.answer(text, reply_markup=kb)
+
     @dp.message(Command("my"))
     async def cmd_my(message: Message) -> None:
         if not message.from_user:
@@ -864,8 +910,7 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Нет доступа.")
                 return
-            text = await format_open_tasks(session, assignee=emp)
-        await message.answer(text)
+            await _send_my_tasks(message=message, assignee=emp, session=session)
 
     @dp.message(Command("team"))
     async def cmd_team(message: Message) -> None:
@@ -1254,6 +1299,85 @@ def build_dispatcher(
                 await callback.bot.send_message(tid, f"✅ {name} сделал(а): {title}")
             except Exception:  # noqa: BLE001
                 pass
+
+    @dp.callback_query(F.data.startswith("mydone:"))
+    async def on_my_done(callback: CallbackQuery) -> None:
+        """Из списка «мои задачи» — сразу отметить выполненной и обновить список."""
+        if not callback.data or not callback.from_user:
+            return
+        parts = callback.data.split(":")
+        try:
+            task_id = int(parts[1])
+            list_owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        except (ValueError, IndexError):
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        uid = int(callback.from_user.id)
+        async with session_factory() as session:
+            actor = await find_employee(session, uid)
+            if not actor:
+                await callback.answer("Нет доступа", show_alert=True)
+                return
+            list_owner = (
+                await session.get(Employee, list_owner_id)
+                if list_owner_id
+                else actor
+            ) or actor
+            task = (
+                await session.scalars(
+                    select(Task)
+                    .where(Task.id == task_id, Task.active.is_(True))
+                    .options(
+                        selectinload(Task.assignee),
+                        selectinload(Task.created_by),
+                        selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+                    )
+                )
+            ).first()
+            if not task:
+                await callback.answer("Задача уже закрыта или не найдена", show_alert=True)
+                if callback.message:
+                    await _send_my_tasks(
+                        edit_message=callback.message,
+                        assignee=list_owner,
+                        session=session,
+                    )
+                return
+            if uid not in _task_allowed_ids(task):
+                await callback.answer("Не твоя задача", show_alert=True)
+                return
+            from app.tasks_service import apply_status
+
+            title = task.title
+            creator_tg = (
+                int(task.created_by.telegram_id)
+                if task.created_by and task.created_by.telegram_id is not None
+                else None
+            )
+            await apply_status(session, task, "done", actor_id=actor.id)
+            run = await resolve_run(session, run_id=None, task_id=task.id)
+            if run:
+                run.status = "done"
+                run.completed_at = datetime.utcnow()
+            await session.commit()
+            await callback.answer(f"✅ {title[:40]}")
+            await _send_my_tasks(
+                edit_message=callback.message,
+                assignee=list_owner,
+                session=session,
+            )
+            notify_ids = {int(settings.owner_telegram_id)}
+            if creator_tg is not None:
+                notify_ids.add(creator_tg)
+            for tid in notify_ids:
+                if tid == uid:
+                    continue
+                try:
+                    await callback.bot.send_message(
+                        tid, f"✅ {actor.name} сделал(а): {title}"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
     @dp.callback_query(F.data.startswith("thp:"))
     async def on_theme_pick(callback: CallbackQuery) -> None:
@@ -1854,8 +1978,12 @@ def build_dispatcher(
                         await wait.edit_text(report)
                         return
                     if who_l in {"me", "себе", "мне", "я", "мои"}:
-                        report = await format_open_tasks(session, assignee=author)
-                        await wait.edit_text(report)
+                        await _send_my_tasks(
+                            message=message,
+                            edit_message=wait,
+                            assignee=author,
+                            session=session,
+                        )
                         return
                     person = _match_assignee(list(people), who, author)
                     if not person:
@@ -1863,8 +1991,13 @@ def build_dispatcher(
                             f"Не нашёл «{who}» в команде. Спроси «у кого какие задачи» или назови имя точно."
                         )
                         return
-                    report = await format_open_tasks(session, assignee=person)
-                    await wait.edit_text(report)
+                    # чужие задачи — тоже с кнопками, если смотришь конкретного человека
+                    await _send_my_tasks(
+                        message=message,
+                        edit_message=wait,
+                        assignee=person,
+                        session=session,
+                    )
                     return
                 if action in {"edit_task", "delete_task", "complete_task"}:
                     query = str(intent.get("query") or "").strip()
