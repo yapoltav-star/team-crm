@@ -73,6 +73,26 @@ class Project(Base):
     tasks: Mapped[list[Task]] = relationship(back_populates="project")
 
 
+class TaskTheme(Base):
+    """Темы распределения задач (системные + личные у менеджера)."""
+
+    __tablename__ = "task_themes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(40), default="")
+    title: Mapped[str] = mapped_column(String(120))
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    owner_employee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), nullable=True, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    owner: Mapped[Employee | None] = relationship(foreign_keys=[owner_employee_id])
+    tasks: Mapped[list[Task]] = relationship(back_populates="theme")
+
+
 class Task(Base):
     """Статусы только: todo=Новая, doing=В работе, done=Выполнено."""
 
@@ -83,6 +103,9 @@ class Task(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     articles: Mapped[str] = mapped_column(String(500), default="")
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    theme_id: Mapped[int | None] = mapped_column(
+        ForeignKey("task_themes.id"), nullable=True, index=True
+    )
     # primary assignee (совместимость с ботом); полный список — в TaskAssignee
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
@@ -102,6 +125,7 @@ class Task(Base):
     template_id: Mapped[int | None] = mapped_column(ForeignKey("task_templates.id"), nullable=True)
 
     project: Mapped[Project | None] = relationship(back_populates="tasks")
+    theme: Mapped[TaskTheme | None] = relationship(back_populates="tasks")
     assignee: Mapped[Employee | None] = relationship(
         back_populates="assigned_tasks",
         foreign_keys=[assignee_id],

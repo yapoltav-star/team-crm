@@ -103,6 +103,35 @@ def ask_comment_kb(task_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def theme_pick_kb(
+    task_id: int,
+    themes: list,
+    *,
+    run_id: int | None = None,
+) -> InlineKeyboardMarkup:
+    """Кнопки выбора темы после «В работе»."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for th in themes[:12]:
+        label = (getattr(th, "title", None) or f"#{getattr(th, 'id', '?')}")[:36]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"thp:{task_id}:{int(th.id)}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Без темы",
+                callback_data=f"thp:{task_id}:0",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def confirm_task_kb(task_id: int) -> InlineKeyboardMarkup:
     """После создания: подтвердить отправку или удалить черновик."""
     return InlineKeyboardMarkup(

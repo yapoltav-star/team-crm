@@ -44,7 +44,9 @@ from app.notify import (
     resolve_run,
     save_task_comment,
     task_action_kb,
+    theme_pick_kb,
 )
+from app.themes import ensure_system_themes, themes_for_employee
 from app.tasks_service import resolve_due_date
 
 logger = logging.getLogger("crm-bot")
@@ -1158,6 +1160,7 @@ def build_dispatcher(
         title = ""
         new_status = action
         uid = int(callback.from_user.id)
+        themes_for_pick: list = []
         async with session_factory() as session:
             run = await resolve_run(session, run_id=run_id, task_id=task_id)
             if not run or not run.task:
@@ -1187,6 +1190,11 @@ def build_dispatcher(
             if new_status == "done":
                 run.status = "done"
                 run.completed_at = datetime.utcnow()
+            if new_status == "doing":
+                await ensure_system_themes(session)
+                themes_for_pick = await themes_for_employee(
+                    session, actor.id if actor else None
+                )
             await session.commit()
             name = (
                 next(
@@ -1212,14 +1220,12 @@ def build_dispatcher(
                 try:
                     await callback.message.edit_text(
                         f"🔵 В работе: <b>{title}</b>\n\n"
-                        "Можешь написать комментарий кнопкой ниже.\n"
-                        "Жми «Сделано», когда закончишь.",
+                        "В какую тему положить задачу?",
                         parse_mode="HTML",
-                        reply_markup=task_action_kb(
-                            run_id_final,
+                        reply_markup=theme_pick_kb(
                             task_id_final,
-                            status="doing",
-                            can_reassign=uid == int(settings.owner_telegram_id),
+                            themes_for_pick,
+                            run_id=run_id_final,
                         ),
                     )
                 except Exception:  # noqa: BLE001
@@ -1246,6 +1252,76 @@ def build_dispatcher(
                 continue
             try:
                 await callback.bot.send_message(tid, f"✅ {name} сделал(а): {title}")
+            except Exception:  # noqa: BLE001
+                pass
+
+    @dp.callback_query(F.data.startswith("thp:"))
+    async def on_theme_pick(callback: CallbackQuery) -> None:
+        """После «В работе»: положить задачу в тему."""
+        if not callback.data or not callback.from_user:
+            return
+        parts = callback.data.split(":")
+        try:
+            task_id = int(parts[1])
+            theme_id = int(parts[2]) if len(parts) > 2 else 0
+        except (ValueError, IndexError):
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        uid = int(callback.from_user.id)
+        title = ""
+        theme_title = "без темы"
+        run_id_final = 0
+        async with session_factory() as session:
+            task = (
+                await session.scalars(
+                    select(Task)
+                    .where(Task.id == task_id)
+                    .options(
+                        selectinload(Task.assignee),
+                        selectinload(Task.created_by),
+                        selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+                        selectinload(Task.theme),
+                    )
+                )
+            ).first()
+            if not task or not task.active:
+                await callback.answer("Задача не найдена", show_alert=True)
+                return
+            if uid not in _task_allowed_ids(task):
+                await callback.answer("Не твоя задача", show_alert=True)
+                return
+            if theme_id:
+                from app.models import TaskTheme
+
+                theme = await session.get(TaskTheme, theme_id)
+                if not theme or not theme.active:
+                    await callback.answer("Тема не найдена", show_alert=True)
+                    return
+                task.theme_id = theme.id
+                theme_title = theme.title
+            else:
+                task.theme_id = None
+            run = await resolve_run(session, run_id=None, task_id=task.id)
+            run_id_final = int(run.id) if run else 0
+            title = task.title
+            await session.commit()
+
+        await callback.answer(f"Тема: {theme_title}")
+        if callback.message:
+            try:
+                await callback.message.edit_text(
+                    f"🔵 В работе: <b>{title}</b>\n"
+                    f"Тема: <b>{theme_title}</b>\n\n"
+                    "Можешь написать комментарий кнопкой ниже.\n"
+                    "Жми «Сделано», когда закончишь.",
+                    parse_mode="HTML",
+                    reply_markup=task_action_kb(
+                        run_id_final,
+                        task_id,
+                        status="doing",
+                        can_reassign=uid == int(settings.owner_telegram_id),
+                    ),
+                )
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1790,7 +1866,7 @@ def build_dispatcher(
                     report = await format_open_tasks(session, assignee=person)
                     await wait.edit_text(report)
                     return
-                if action in {"edit_task", "delete_task"}:
+                if action in {"edit_task", "delete_task", "complete_task"}:
                     query = str(intent.get("query") or "").strip()
                     who = str(intent.get("who") or ("all" if is_owner else "me")).strip()
                     if not query:
@@ -1825,6 +1901,21 @@ def build_dispatcher(
                             return
                     if not match:
                         await wait.edit_text(f"Не нашёл задачу «{query}».")
+                        return
+                    if action == "complete_task":
+                        from app.tasks_service import apply_status
+
+                        await apply_status(
+                            session, match, "done", actor_id=author.id
+                        )
+                        run = await resolve_run(session, run_id=None, task_id=match.id)
+                        if run:
+                            run.status = "done"
+                            run.completed_at = datetime.utcnow()
+                        await session.commit()
+                        await wait.edit_text(
+                            f"✅ Закрыл #{match.id}: {match.title}\nСтатус: выполнено"
+                        )
                         return
                     if action == "delete_task":
                         match.active = False

@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-11" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-12" />
 </head>
 <body>
   <header class="top">
@@ -98,6 +98,7 @@
             />
             <input type="date" id="quickDue" title="Срок" />
             <button type="submit">Назначить</button>
+            <button type="button" id="btnThemes" class="ghost" title="Темы задач">Темы</button>
           </form>
         </div>
         <main id="board" class="board"></main>
@@ -262,6 +263,25 @@
     </form>
   </dialog>
 
+  <!-- THEMES DIALOG -->
+  <dialog id="themeDlg">
+    <form id="themeForm">
+      <h3>Темы задач</h3>
+      <p class="tpl-schedule-hint">Системные темы видит вся команда. Свои темы — только ты. Владелец может править системные.</p>
+      <div id="themeList" class="theme-edit-list"></div>
+      <label>Новая тема
+        <input id="themeNewTitle" type="text" maxlength="120" placeholder="название темы" autocomplete="off" />
+      </label>
+      <label class="check-row" id="themeSystemRow">
+        <input type="checkbox" id="themeAsSystem" /> Системная (для всех)
+      </label>
+      <menu>
+        <button type="button" id="themeCancel" class="ghost">Закрыть</button>
+        <button type="button" id="themeAdd">Добавить</button>
+      </menu>
+    </form>
+  </dialog>
+
   <!-- TEMPLATE DIALOG -->
   <dialog id="tplDlg">
     <form id="tplForm">
@@ -316,6 +336,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-10"></script>
+  <script src="/static/app.js?v=pw-12"></script>
 </body>
 </html>

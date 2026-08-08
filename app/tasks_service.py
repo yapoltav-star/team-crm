@@ -147,6 +147,7 @@ async def load_task_full(session: AsyncSession, task_id: int) -> Task:
             .options(
                 selectinload(Task.assignee),
                 selectinload(Task.project),
+                selectinload(Task.theme),
                 selectinload(Task.created_by),
                 selectinload(Task.completed_by),
                 selectinload(Task.assignees).selectinload(TaskAssignee.employee),

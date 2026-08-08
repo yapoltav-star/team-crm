@@ -97,11 +97,40 @@ class EventOut(BaseModel):
     created_at: datetime
 
 
+class TaskThemeIn(BaseModel):
+    title: str
+    owner_employee_id: int | None = None
+    position: int | None = None
+    active: bool = True
+    is_system: bool = False
+    actor_id: int | None = None
+
+
+class TaskThemePatch(BaseModel):
+    title: str | None = None
+    position: int | None = None
+    active: bool | None = None
+    actor_id: int | None = None
+
+
+class TaskThemeOut(BaseModel):
+    id: int
+    key: str = ""
+    title: str
+    is_system: bool = False
+    owner_employee_id: int | None = None
+    position: int = 0
+    active: bool = True
+
+    model_config = {"from_attributes": True}
+
+
 class TaskIn(BaseModel):
     title: str
     description: str = ""
     articles: str = ""
     project_id: int | None = None
+    theme_id: int | None = None
     assignee_id: int | None = None
     assignee_ids: list[int] = Field(default_factory=list)
     created_by_id: int | None = None
@@ -119,6 +148,7 @@ class TaskPatch(BaseModel):
     description: str | None = None
     articles: str | None = None
     project_id: int | None = None
+    theme_id: int | None = None
     assignee_id: int | None = None
     assignee_ids: list[int] | None = None
     status: str | None = None
@@ -144,6 +174,8 @@ class TaskOut(BaseModel):
     description: str
     articles: str = ""
     project_id: int | None
+    theme_id: int | None = None
+    theme_title: str | None = None
     assignee_id: int | None
     created_by_id: int | None = None
     completed_by_id: int | None = None
@@ -176,6 +208,7 @@ class BoardOut(BaseModel):
     projects: list[ProjectOut]
     employees: list[EmployeeOut]
     tasks: list[TaskOut]
+    themes: list[TaskThemeOut] = Field(default_factory=list)
     columns: list[str] = Field(default_factory=lambda: ["todo", "doing", "done"])
 
 

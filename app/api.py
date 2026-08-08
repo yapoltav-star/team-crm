@@ -20,7 +20,9 @@ from app.models import (
     TaskAssignee,
     TaskComment,
     TaskTemplate,
+    TaskTheme,
 )
+from app.themes import ensure_system_themes, themes_for_employee
 from app.notify import notify_task_assignee
 from app.schemas import (
     ArticleOut,
@@ -38,6 +40,9 @@ from app.schemas import (
     TaskOut,
     TaskPatch,
     TaskReassignIn,
+    TaskThemeIn,
+    TaskThemeOut,
+    TaskThemePatch,
     TeamGroupIn,
     TemplateIn,
     TemplateOut,
@@ -196,6 +201,8 @@ def _task_out(
         description=task.description or "",
         articles=task.articles or "",
         project_id=task.project_id,
+        theme_id=task.theme_id,
+        theme_title=task.theme.title if getattr(task, "theme", None) else None,
         assignee_id=task.assignee_id,
         created_by_id=task.created_by_id,
         completed_by_id=task.completed_by_id,
@@ -223,10 +230,23 @@ def _task_out(
     )
 
 
+def _theme_out(t: TaskTheme) -> TaskThemeOut:
+    return TaskThemeOut(
+        id=t.id,
+        key=t.key or "",
+        title=t.title,
+        is_system=bool(t.is_system),
+        owner_employee_id=t.owner_employee_id,
+        position=t.position or 0,
+        active=bool(t.active),
+    )
+
+
 def _task_options():
     return (
         selectinload(Task.assignee),
         selectinload(Task.project),
+        selectinload(Task.theme),
         selectinload(Task.created_by),
         selectinload(Task.completed_by),
         selectinload(Task.assignees).selectinload(TaskAssignee.employee),
@@ -255,12 +275,16 @@ async def board(
         if not viewer or not viewer.active:
             raise HTTPException(404, "Employee not found")
 
+    await ensure_system_themes(session)
+
     if viewer is None:
         emp_outs = [await _employee_out(session, e) for e in all_employees]
+        themes = await themes_for_employee(session, None)
         return BoardOut(
             projects=[ProjectOut.model_validate(p) for p in projects],
             employees=emp_outs,
             tasks=[],
+            themes=[_theme_out(t) for t in themes],
         )
 
     subject_ids = await _visible_subject_ids(session, viewer)
@@ -282,11 +306,24 @@ async def board(
 
     emp_source = all_employees if viewer.role == "owner" else visible_employees
     emp_outs = [await _employee_out(session, e) for e in emp_source]
+    themes = await themes_for_employee(session, viewer.id)
+    # плюс чужие личные темы, если на доске уже есть задачи с ними
+    theme_ids = {t.theme_id for t in tasks if t.theme_id}
+    known = {t.id for t in themes}
+    missing = theme_ids - known
+    if missing:
+        extra = (
+            await session.scalars(
+                select(TaskTheme).where(TaskTheme.id.in_(missing), TaskTheme.active.is_(True))
+            )
+        ).all()
+        themes = list(themes) + list(extra)
 
     return BoardOut(
         projects=[ProjectOut.model_validate(p) for p in projects],
         employees=emp_outs,
         tasks=[_task_out(t, today=today) for t in tasks],
+        themes=[_theme_out(t) for t in themes],
     )
 
 
@@ -612,11 +649,21 @@ async def patch_task(
     actor_id = data.pop("actor_id", None)
     assignee_ids = data.pop("assignee_ids", None)
     new_status = data.pop("status", None)
+    theme_id = data.pop("theme_id", None) if "theme_id" in data else ...
 
     single_assignee = data.pop("assignee_id", None)
 
     for key, value in data.items():
         setattr(task, key, value)
+
+    if theme_id is not ...:
+        if theme_id is None:
+            task.theme_id = None
+        else:
+            theme = await session.get(TaskTheme, int(theme_id))
+            if not theme or not theme.active:
+                raise HTTPException(404, "Тема не найдена")
+            task.theme_id = theme.id
 
     if new_status is not None:
         try:
@@ -815,6 +862,115 @@ async def archive_run() -> dict:
     from app.archive import archive_old_done_tasks
 
     return await archive_old_done_tasks(SessionLocal)
+
+
+@router.get("/themes", response_model=list[TaskThemeOut])
+async def list_themes(
+    employee_id: int | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+) -> list[TaskThemeOut]:
+    await ensure_system_themes(session)
+    rows = await themes_for_employee(session, employee_id)
+    return [_theme_out(t) for t in rows]
+
+
+@router.post("/themes", response_model=TaskThemeOut)
+async def create_theme(
+    body: TaskThemeIn, session: AsyncSession = Depends(get_session)
+) -> TaskThemeOut:
+    await ensure_system_themes(session)
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(400, "Нужно название темы")
+    actor = await session.get(Employee, body.actor_id) if body.actor_id else None
+    if body.is_system:
+        if not actor or actor.role != "owner":
+            raise HTTPException(403, "Системные темы меняет только владелец")
+        theme = TaskTheme(
+            key="",
+            title=title,
+            is_system=True,
+            owner_employee_id=None,
+            position=body.position if body.position is not None else 100,
+            active=body.active,
+        )
+    else:
+        owner_id = body.owner_employee_id or (actor.id if actor else None)
+        if not owner_id:
+            raise HTTPException(400, "Нужен owner_employee_id или actor_id")
+        theme = TaskTheme(
+            key="",
+            title=title,
+            is_system=False,
+            owner_employee_id=owner_id,
+            position=body.position if body.position is not None else 0,
+            active=body.active,
+        )
+    session.add(theme)
+    await session.commit()
+    await session.refresh(theme)
+    return _theme_out(theme)
+
+
+@router.patch("/themes/{theme_id}", response_model=TaskThemeOut)
+async def patch_theme(
+    theme_id: int, body: TaskThemePatch, session: AsyncSession = Depends(get_session)
+) -> TaskThemeOut:
+    theme = await session.get(TaskTheme, theme_id)
+    if not theme:
+        raise HTTPException(404, "Тема не найдена")
+    actor = await session.get(Employee, body.actor_id) if body.actor_id else None
+    if theme.is_system:
+        if not actor or actor.role != "owner":
+            raise HTTPException(403, "Системные темы меняет только владелец")
+    else:
+        if not actor or (
+            actor.role != "owner" and actor.id != theme.owner_employee_id
+        ):
+            raise HTTPException(403, "Чужую тему менять нельзя")
+    data = body.model_dump(exclude_unset=True)
+    data.pop("actor_id", None)
+    if "title" in data and data["title"] is not None:
+        title = str(data["title"]).strip()
+        if not title:
+            raise HTTPException(400, "Нужно название темы")
+        theme.title = title
+    if "position" in data and data["position"] is not None:
+        theme.position = int(data["position"])
+    if "active" in data and data["active"] is not None:
+        theme.active = bool(data["active"])
+    await session.commit()
+    await session.refresh(theme)
+    return _theme_out(theme)
+
+
+@router.delete("/themes/{theme_id}")
+async def delete_theme(
+    theme_id: int,
+    actor_id: int | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    theme = await session.get(TaskTheme, theme_id)
+    if not theme:
+        raise HTTPException(404, "Тема не найдена")
+    actor = await session.get(Employee, actor_id) if actor_id else None
+    if theme.is_system:
+        if not actor or actor.role != "owner":
+            raise HTTPException(403, "Системные темы удаляет только владелец")
+    else:
+        if not actor or (
+            actor.role != "owner" and actor.id != theme.owner_employee_id
+        ):
+            raise HTTPException(403, "Чужую тему удалять нельзя")
+    theme.active = False
+    # отвязать задачи от темы
+    tasks = (
+        await session.scalars(select(Task).where(Task.theme_id == theme_id))
+    ).all()
+    for t in tasks:
+        t.theme_id = None
+    await session.commit()
+    return {"ok": True}
 
 
 def _template_out(t: TaskTemplate) -> TemplateOut:

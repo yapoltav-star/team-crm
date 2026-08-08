@@ -121,8 +121,36 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "complete_task",
+            "description": (
+                "Закрыть / завершить задачу как выполненную (статус done). "
+                "Для фраз: закрой, заверши, сделай выполненной, отметь сделанной, "
+                "готово по задаче. НЕ удаляет задачу."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "id задачи или часть названия",
+                    },
+                    "who": {
+                        "type": "string",
+                        "description": "me|all|имя — где искать",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "delete_task",
-            "description": "Удалить открытую задачу (по номеру или фрагменту названия)",
+            "description": (
+                "Удалить задачу насовсем. Только если явно сказали «удали/убери/снеси». "
+                "«Закрой/заверши» — это НЕ удаление, для них complete_task."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -194,8 +222,12 @@ async def parse_intent(
         "система сама развернёт в полный vendorCode; не выдумывай артикулы.\n"
         "Спросить задачи / кто чем занят / у кого что → list_tasks "
         "(who=all для всей команды, who=имя, who=me для своих).\n"
-        "Изменить текст → edit_task. Удалить → delete_task "
-        "(query = id или часть названия).\n"
+        "Изменить текст → edit_task.\n"
+        "«закрой задачу …» / «заверши» / «отметь сделанной» → complete_task "
+        "(задача становится выполненной, НЕ удаляется).\n"
+        "«удали задачу …» / «убери» / «снеси» → delete_task.\n"
+        "ВАЖНО: закрой ≠ удали. Если сказали закрой/заверши — только complete_task.\n"
+        "query = id или часть названия.\n"
         "Не выдумывай задачи — только вызывай tool, данные подтянет система.\n"
         "Иначе короткий ответ."
     )
@@ -217,7 +249,26 @@ async def parse_intent(
             args = json.loads(call.function.arguments or "{}")
         except json.JSONDecodeError:
             args = {}
-        return {"action": call.function.name, **args}
+        action = call.function.name
+        low = (text or "").lower().replace("ё", "е")
+        close_words = (
+            "закрой",
+            "закройте",
+            "заверши",
+            "завершите",
+            "закрыть",
+            "завершить",
+            "отметь сделан",
+            "отметь выполн",
+            "сделай выполнен",
+        )
+        delete_words = ("удали", "удалите", "убери", "уберите", "снеси", "сноси")
+        wants_close = any(w in low for w in close_words)
+        wants_delete = any(w in low for w in delete_words)
+        # страховка: «закрой» никогда не должно стать удалением
+        if action == "delete_task" and wants_close and not wants_delete:
+            action = "complete_task"
+        return {"action": action, **args}
     return {"action": "chat", "reply": (msg.content or "Не понял.").strip()}
 
 

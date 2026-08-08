@@ -646,6 +646,7 @@ function cardHtml(t) {
     ${desc ? `<div class="desc">${escapeHtml(desc)}</div>` : ""}
     <div class="meta">
       ${avatarsHtml(assignees)}
+      ${t.theme_title ? `<span class="chip theme">${escapeHtml(t.theme_title)}</span>` : ""}
       ${t.due_date ? `<span class="chip">до ${formatDate(t.due_date)}</span>` : ""}
       ${t.created_by_name ? `<span class="chip">от ${escapeHtml(t.created_by_name)}</span>` : ""}
       ${t.project_name ? `<span class="chip project">${escapeHtml(t.project_name)}</span>` : ""}
@@ -702,6 +703,64 @@ function bindCard(card, t) {
   });
 }
 
+function boardThemes() {
+  return (state.board?.themes || []).filter((t) => t.active !== false);
+}
+
+function themeLanes(tasksInCol) {
+  const themes = boardThemes();
+  const used = new Set(tasksInCol.map((t) => t.theme_id).filter(Boolean));
+  const lanes = [{ id: null, title: "Без темы" }];
+  for (const th of themes) {
+    const mine = !th.is_system && th.owner_employee_id === state.meId;
+    if (th.is_system || mine || used.has(th.id)) {
+      lanes.push({ id: th.id, title: th.title, is_system: !!th.is_system });
+    }
+  }
+  return lanes;
+}
+
+function appendCard(host, t) {
+  const card = document.createElement("article");
+  card.className = `card due-${t.due_flag || "none"}`;
+  card.draggable = true;
+  card.dataset.id = t.id;
+  card.innerHTML = cardHtml(t);
+  paintCard(card, t);
+  bindCard(card, t);
+  host.appendChild(card);
+}
+
+function bindDropZone(el, { status, themeId }) {
+  el.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    el.classList.add("drag-over");
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
+  el.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.remove("drag-over");
+    const id = Number(state.dragId || e.dataTransfer.getData("text/plain"));
+    if (!id) return;
+    const body = { status, actor_id: state.meId || null };
+    if (status === "todo") {
+      body.theme_id = null;
+    } else if (themeId !== undefined) {
+      body.theme_id = themeId;
+    }
+    try {
+      await api(`/api/tasks/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      await load();
+    } catch (err) {
+      alert(err.message || String(err));
+    }
+  });
+}
+
 function renderBoard() {
   const tasks = filteredTasks();
   const board = $("#board");
@@ -712,40 +771,120 @@ function renderBoard() {
     colEl.className = `column ${col.id}`;
     const list = tasks.filter((t) => t.status === col.id);
     colEl.innerHTML = `<div class="col-head"><span class="col-badge">${col.title}</span><span class="col-count">${list.length}</span></div>`;
-    const cards = document.createElement("div");
-    cards.className = "cards";
-    cards.dataset.status = col.id;
 
-    cards.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      cards.classList.add("drag-over");
-    });
-    cards.addEventListener("dragleave", () => cards.classList.remove("drag-over"));
-    cards.addEventListener("drop", async (e) => {
-      e.preventDefault();
-      cards.classList.remove("drag-over");
-      const id = Number(state.dragId || e.dataTransfer.getData("text/plain"));
-      if (!id) return;
-      await api(`/api/tasks/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: col.id, actor_id: state.meId || null }),
-      });
-      await load();
-    });
-
-    for (const t of list) {
-      const card = document.createElement("article");
-      card.className = `card due-${t.due_flag || "none"}`;
-      card.draggable = true;
-      card.dataset.id = t.id;
-      card.innerHTML = cardHtml(t);
-      paintCard(card, t);
-      bindCard(card, t);
-      cards.appendChild(card);
+    if (col.id === "todo") {
+      const cards = document.createElement("div");
+      cards.className = "cards";
+      cards.dataset.status = col.id;
+      bindDropZone(cards, { status: col.id, themeId: null });
+      for (const t of list) appendCard(cards, t);
+      colEl.appendChild(cards);
+    } else {
+      const lanesWrap = document.createElement("div");
+      lanesWrap.className = "theme-lanes";
+      for (const lane of themeLanes(list)) {
+        const laneTasks = list.filter((t) =>
+          lane.id == null ? !t.theme_id : Number(t.theme_id) === Number(lane.id)
+        );
+        const laneEl = document.createElement("div");
+        laneEl.className = "theme-lane";
+        laneEl.innerHTML = `<div class="theme-lane-head"><span>${escapeHtml(
+          lane.title
+        )}</span><span class="col-count">${laneTasks.length}</span></div>`;
+        const cards = document.createElement("div");
+        cards.className = "cards theme-cards";
+        cards.dataset.status = col.id;
+        cards.dataset.themeId = lane.id == null ? "" : String(lane.id);
+        bindDropZone(cards, {
+          status: col.id,
+          themeId: lane.id == null ? null : lane.id,
+        });
+        for (const t of laneTasks) appendCard(cards, t);
+        laneEl.appendChild(cards);
+        lanesWrap.appendChild(laneEl);
+      }
+      colEl.appendChild(lanesWrap);
     }
-    colEl.appendChild(cards);
     board.appendChild(colEl);
   }
+}
+
+function renderThemeDialog() {
+  const list = $("#themeList");
+  if (!list) return;
+  const themes = boardThemes();
+  const systemRow = $("#themeSystemRow");
+  if (systemRow) systemRow.classList.toggle("hidden", !isOwner());
+  if (!themes.length) {
+    list.innerHTML = `<div class="chat-empty">Тем пока нет</div>`;
+    return;
+  }
+  list.innerHTML = themes
+    .map((t) => {
+      const canEdit =
+        isOwner() || (!t.is_system && t.owner_employee_id === state.meId);
+      const kind = t.is_system ? "системная" : "моя";
+      return `
+      <div class="theme-edit-row" data-id="${t.id}">
+        <div>
+          <strong>${escapeHtml(t.title)}</strong>
+          <span class="chip">${kind}</span>
+        </div>
+        <div class="theme-edit-actions">
+          ${
+            canEdit
+              ? `<button type="button" class="ghost" data-act="rename">✎</button>
+                 <button type="button" class="ghost danger" data-act="del">✕</button>`
+              : ""
+          }
+        </div>
+      </div>`;
+    })
+    .join("");
+  list.querySelectorAll(".theme-edit-row").forEach((row) => {
+    const id = Number(row.dataset.id);
+    row.querySelector('[data-act="rename"]')?.addEventListener("click", async () => {
+      const th = themes.find((x) => x.id === id);
+      const title = prompt("Название темы", th?.title || "");
+      if (title == null) return;
+      const name = String(title).trim();
+      if (!name) return;
+      try {
+        await api(`/api/themes/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title: name, actor_id: state.meId || null }),
+        });
+        await load();
+        renderThemeDialog();
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+    row.querySelector('[data-act="del"]')?.addEventListener("click", async () => {
+      if (!confirm("Удалить тему? Задачи останутся без темы.")) return;
+      try {
+        await api(`/api/themes/${id}?actor_id=${state.meId || ""}`, {
+          method: "DELETE",
+        });
+        await load();
+        renderThemeDialog();
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
+}
+
+function openThemeDialog() {
+  if (!state.meId) {
+    alert("Сначала войди");
+    return;
+  }
+  $("#themeNewTitle").value = "";
+  const asSys = $("#themeAsSystem");
+  if (asSys) asSys.checked = false;
+  renderThemeDialog();
+  $("#themeDlg").showModal();
 }
 
 function renderHomeStats() {
@@ -1749,6 +1888,38 @@ $("#btnComment").addEventListener("click", async () => {
     });
     await openTaskDialog(id);
     await load();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+});
+
+$("#btnThemes")?.addEventListener("click", () => openThemeDialog());
+$("#themeCancel")?.addEventListener("click", () => $("#themeDlg")?.close());
+$("#themeAdd")?.addEventListener("click", async () => {
+  const title = String($("#themeNewTitle")?.value || "").trim();
+  if (!title) {
+    alert("Введи название темы");
+    return;
+  }
+  if (!state.meId) {
+    alert("Сначала войди");
+    return;
+  }
+  const asSystem = !!$("#themeAsSystem")?.checked && isOwner();
+  try {
+    await api("/api/themes", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        is_system: asSystem,
+        owner_employee_id: asSystem ? null : state.meId,
+        actor_id: state.meId,
+      }),
+    });
+    $("#themeNewTitle").value = "";
+    if ($("#themeAsSystem")) $("#themeAsSystem").checked = false;
+    await load();
+    renderThemeDialog();
   } catch (err) {
     alert(err.message || String(err));
   }

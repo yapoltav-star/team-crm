@@ -30,6 +30,7 @@ async def init_db() -> None:
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP",
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id INTEGER",
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS theme_id INTEGER",
             "ALTER TABLE employees ALTER COLUMN telegram_id TYPE BIGINT",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_group VARCHAR(100) DEFAULT ''",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS job_title VARCHAR(80) DEFAULT ''",
@@ -41,6 +42,18 @@ async def init_db() -> None:
                 UNIQUE (viewer_id, subject_id)
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS task_themes (
+                id SERIAL PRIMARY KEY,
+                key VARCHAR(40) DEFAULT '',
+                title VARCHAR(120) NOT NULL,
+                is_system BOOLEAN DEFAULT FALSE,
+                owner_employee_id INTEGER REFERENCES employees(id),
+                position INTEGER DEFAULT 0,
+                active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP
+            )
+            """,
         ):
             try:
                 await conn.execute(text(stmt))
@@ -48,9 +61,14 @@ async def init_db() -> None:
                 pass
 
     from app.catalog import seed_articles_from_file
+    from app.themes import ensure_system_themes
 
     async with SessionLocal() as session:
         await seed_articles_from_file(session)
+        try:
+            await ensure_system_themes(session)
+        except Exception:
+            await session.rollback()
         # migrate legacy single assignee → task_assignees
         try:
             await session.execute(
