@@ -174,6 +174,7 @@ async def lifespan(app: FastAPI):
             from app.task_digest import _parse_hm, send_task_digests
 
             mh, mm = _parse_hm(settings.digest_morning_time, (9, 0))
+            dh, dm = _parse_hm(settings.digest_midday_time, (13, 0))
             eh, em = _parse_hm(settings.digest_evening_time, (18, 0))
 
             async def morning_digest() -> None:
@@ -184,6 +185,15 @@ async def lifespan(app: FastAPI):
                     kind="morning",
                 )
                 logger.info("morning_digest: %s", result)
+
+            async def midday_digest() -> None:
+                result = await send_task_digests(
+                    session_factory=SessionLocal,
+                    settings=settings,
+                    bot=getattr(app.state, "bot", None),
+                    kind="midday",
+                )
+                logger.info("midday_digest: %s", result)
 
             async def evening_digest() -> None:
                 result = await send_task_digests(
@@ -202,6 +212,13 @@ async def lifespan(app: FastAPI):
                 max_instances=1,
             )
             scheduler.add_job(
+                midday_digest,
+                CronTrigger(hour=dh, minute=dm, timezone=settings.tz_name),
+                id="digest_midday",
+                replace_existing=True,
+                max_instances=1,
+            )
+            scheduler.add_job(
                 evening_digest,
                 CronTrigger(hour=eh, minute=em, timezone=settings.tz_name),
                 id="digest_evening",
@@ -209,9 +226,11 @@ async def lifespan(app: FastAPI):
                 max_instances=1,
             )
             logger.info(
-                "Task digests: morning %02d:%02d, evening %02d:%02d (%s)",
+                "Task digests: morning %02d:%02d, midday %02d:%02d, evening %02d:%02d (%s)",
                 mh,
                 mm,
+                dh,
+                dm,
                 eh,
                 em,
                 settings.tz_name,

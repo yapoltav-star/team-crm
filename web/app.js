@@ -647,7 +647,10 @@ function cardHtml(t) {
     <div class="meta">
       ${avatarsHtml(assignees)}
       ${t.theme_title ? `<span class="chip theme">${escapeHtml(t.theme_title)}</span>` : ""}
-      ${t.due_date ? `<span class="chip">до ${formatDate(t.due_date)}</span>` : ""}
+      <label class="chip due-chip" title="Нажми — сменить срок">
+        <span>${t.due_date ? `до ${escapeHtml(formatDate(t.due_date))}` : "срок"}</span>
+        <input type="date" class="due-chip-input" value="${escapeHtml(t.due_date || "")}" />
+      </label>
       ${t.created_by_name ? `<span class="chip">от ${escapeHtml(t.created_by_name)}</span>` : ""}
       ${t.project_name ? `<span class="chip project">${escapeHtml(t.project_name)}</span>` : ""}
     </div>
@@ -664,6 +667,36 @@ async function archiveTask(t) {
   const q = state.meId ? `?actor_id=${state.meId}` : "";
   await api(`/api/tasks/${t.id}/archive${q}`, { method: "POST" });
   await load();
+}
+
+function bindDueChip(card, t) {
+  const dueChip = card.querySelector(".due-chip");
+  const dueInput = card.querySelector(".due-chip-input");
+  if (!dueChip || !dueInput) return;
+  dueChip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      dueInput.showPicker?.();
+    } catch (_) {
+      dueInput.focus();
+      dueInput.click();
+    }
+  });
+  dueInput.addEventListener("click", (e) => e.stopPropagation());
+  dueInput.addEventListener("change", async (e) => {
+    e.stopPropagation();
+    const due = String(dueInput.value || "").trim() || null;
+    try {
+      await api(`/api/tasks/${t.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ due_date: due, actor_id: state.meId || null }),
+      });
+      await load();
+    } catch (err) {
+      alert(err.message || String(err));
+    }
+  });
 }
 
 function bindCard(card, t) {
@@ -683,13 +716,17 @@ function bindCard(card, t) {
       alert(err.message || String(err));
     }
   });
-  card.addEventListener("dblclick", () => openTaskDialog(t.id));
+  bindDueChip(card, t);
+  card.addEventListener("dblclick", (e) => {
+    if (e.target.closest(".due-chip, .card-actions")) return;
+    openTaskDialog(t.id);
+  });
   card.addEventListener("click", (e) => {
-    if (e.target.closest(".card-actions")) return;
+    if (e.target.closest(".card-actions, .due-chip")) return;
     openTaskDialog(t.id);
   });
   card.addEventListener("dragstart", (e) => {
-    if (e.target.closest(".card-actions")) {
+    if (e.target.closest(".card-actions, .due-chip")) {
       e.preventDefault();
       return;
     }
@@ -710,12 +747,16 @@ function boardThemes() {
 function themeLanes(tasksInCol) {
   const themes = boardThemes();
   const used = new Set(tasksInCol.map((t) => t.theme_id).filter(Boolean));
-  const lanes = [{ id: null, title: "Без темы" }];
+  const hasUnthemed = tasksInCol.some((t) => !t.theme_id);
+  const lanes = [];
+  // пустые темы не показываем — только те, где уже есть задачи
   for (const th of themes) {
-    const mine = !th.is_system && th.owner_employee_id === state.meId;
-    if (th.is_system || mine || used.has(th.id)) {
+    if (used.has(th.id)) {
       lanes.push({ id: th.id, title: th.title, is_system: !!th.is_system });
     }
+  }
+  if (hasUnthemed) {
+    lanes.push({ id: null, title: "Без темы" });
   }
   return lanes;
 }
@@ -780,30 +821,40 @@ function renderBoard() {
       for (const t of list) appendCard(cards, t);
       colEl.appendChild(cards);
     } else {
-      const lanesWrap = document.createElement("div");
-      lanesWrap.className = "theme-lanes";
-      for (const lane of themeLanes(list)) {
-        const laneTasks = list.filter((t) =>
-          lane.id == null ? !t.theme_id : Number(t.theme_id) === Number(lane.id)
-        );
-        const laneEl = document.createElement("div");
-        laneEl.className = "theme-lane";
-        laneEl.innerHTML = `<div class="theme-lane-head"><span>${escapeHtml(
-          lane.title
-        )}</span><span class="col-count">${laneTasks.length}</span></div>`;
+      const lanes = themeLanes(list);
+      if (!lanes.length) {
+        // колонка пуста — одна зона сброса без заголовков тем
         const cards = document.createElement("div");
         cards.className = "cards theme-cards";
         cards.dataset.status = col.id;
-        cards.dataset.themeId = lane.id == null ? "" : String(lane.id);
-        bindDropZone(cards, {
-          status: col.id,
-          themeId: lane.id == null ? null : lane.id,
-        });
-        for (const t of laneTasks) appendCard(cards, t);
-        laneEl.appendChild(cards);
-        lanesWrap.appendChild(laneEl);
+        bindDropZone(cards, { status: col.id, themeId: null });
+        colEl.appendChild(cards);
+      } else {
+        const lanesWrap = document.createElement("div");
+        lanesWrap.className = "theme-lanes";
+        for (const lane of lanes) {
+          const laneTasks = list.filter((t) =>
+            lane.id == null ? !t.theme_id : Number(t.theme_id) === Number(lane.id)
+          );
+          const laneEl = document.createElement("div");
+          laneEl.className = "theme-lane";
+          laneEl.innerHTML = `<div class="theme-lane-head"><span>${escapeHtml(
+            lane.title
+          )}</span><span class="col-count">${laneTasks.length}</span></div>`;
+          const cards = document.createElement("div");
+          cards.className = "cards theme-cards";
+          cards.dataset.status = col.id;
+          cards.dataset.themeId = lane.id == null ? "" : String(lane.id);
+          bindDropZone(cards, {
+            status: col.id,
+            themeId: lane.id == null ? null : lane.id,
+          });
+          for (const t of laneTasks) appendCard(cards, t);
+          laneEl.appendChild(cards);
+          lanesWrap.appendChild(laneEl);
+        }
+        colEl.appendChild(lanesWrap);
       }
-      colEl.appendChild(lanesWrap);
     }
     board.appendChild(colEl);
   }
@@ -964,7 +1015,11 @@ function renderHome() {
         card.innerHTML = cardHtml(t);
         paintCard(card, t);
         card.querySelector(".card-actions")?.remove();
-        card.addEventListener("click", () => openTaskDialog(t.id));
+        bindDueChip(card, t);
+        card.addEventListener("click", (e) => {
+          if (e.target.closest(".due-chip")) return;
+          openTaskDialog(t.id);
+        });
         list.appendChild(card);
       }
     }

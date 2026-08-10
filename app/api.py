@@ -1080,9 +1080,9 @@ async def shelf_watch_run(request: Request) -> dict:
 @router.post("/digest/run")
 async def digest_run(
     request: Request,
-    kind: str = Query("morning", pattern="^(morning|evening)$"),
+    kind: str = Query("morning", pattern="^(morning|midday|evening)$"),
 ) -> dict:
-    """Ручная утренняя/вечерняя рассылка задач менеджерам."""
+    """Ручная рассылка: morning | midday | evening."""
     from app.task_digest import send_task_digests
 
     settings = get_settings()

@@ -14,9 +14,10 @@ class Settings(BaseSettings):
     owner_telegram_id: int = Field(default=0, alias="OWNER_TELEGRAM_ID")
     tz_name: str = Field(default="Europe/Moscow", alias="TZ")
     escalate_time: str = Field(default="20:00", alias="ESCALATE_TIME")
-    # утренний/вечерний список задач менеджерам
+    # утро / обед / вечер — напоминания (на сегодня особенно)
     digest_enabled: bool = Field(default=True, alias="DIGEST_ENABLED")
     digest_morning_time: str = Field(default="09:00", alias="DIGEST_MORNING_TIME")
+    digest_midday_time: str = Field(default="13:00", alias="DIGEST_MIDDAY_TIME")
     digest_evening_time: str = Field(default="18:00", alias="DIGEST_EVENING_TIME")
     telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")
     database_url: str = Field(default="", alias="DATABASE_URL")
@@ -72,6 +73,7 @@ class Settings(BaseSettings):
         "shelf_watch_days",
         "shelf_watch_time",
         "digest_morning_time",
+        "digest_midday_time",
         "digest_evening_time",
         mode="before",
     )
