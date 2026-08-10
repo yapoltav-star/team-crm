@@ -1389,6 +1389,26 @@ async function openTaskDialog(taskId) {
     )[0] || "";
   form.elements.status.value = task.status || "todo";
   form.elements.due_date.value = task.due_date || "";
+  const themeSel = form.elements.theme_id;
+  const themes = boardThemes().slice();
+  // если у задачи тема, которой нет в списке (чужая личная) — добавим
+  if (task.theme_id && !themes.some((th) => Number(th.id) === Number(task.theme_id))) {
+    themes.push({
+      id: task.theme_id,
+      title: task.theme_title || `Тема #${task.theme_id}`,
+      is_system: false,
+    });
+  }
+  themeSel.innerHTML =
+    `<option value="">Без темы</option>` +
+    themes
+      .map((th) => {
+        const mark = th.is_system ? "" : " · моя";
+        return `<option value="${th.id}" ${
+          Number(task.theme_id) === Number(th.id) ? "selected" : ""
+        }>${escapeHtml(th.title)}${mark}</option>`;
+      })
+      .join("");
   const project = form.elements.project_id;
   project.innerHTML =
     `<option value="">Без проекта</option>` +
@@ -1899,6 +1919,9 @@ $("#dlgForm").addEventListener("submit", async (e) => {
     articles: String(form.elements.articles.value || "").trim(),
     status: form.elements.status.value,
     due_date: form.elements.due_date.value || null,
+    theme_id: form.elements.theme_id.value
+      ? Number(form.elements.theme_id.value)
+      : null,
     assignee_ids,
     assignee_id: assignee_ids[0] || null,
     project_id: form.elements.project_id.value
