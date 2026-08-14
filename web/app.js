@@ -806,8 +806,11 @@ function bindDropZone(el, { status, themeId, keepTheme = false }) {
     const body = { status, actor_id: state.meId || null };
     if (status === "todo") {
       body.theme_id = null;
+    } else if (status === "done") {
+      // в «Выполнено» всегда та же тема, что была (из «В работе» / откуда угодно)
+      if (prev && prev.theme_id != null) body.theme_id = prev.theme_id;
+      else if (themeId !== undefined) body.theme_id = themeId;
     } else if (keepTheme) {
-      // пустая колонка — оставляем ту же тему, что была у задачи
       if (prev && prev.theme_id != null) body.theme_id = prev.theme_id;
     } else if (themeId !== undefined) {
       body.theme_id = themeId;
