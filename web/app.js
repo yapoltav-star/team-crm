@@ -631,7 +631,7 @@ function cardHtml(t) {
       : [];
   const desc = cardDisplayDescription(t.description);
   const archiveBtn =
-    t.status === "done"
+    t.status === "done" || t.status === "doing"
       ? `<button type="button" class="btn-archive" title="В архив">Архив</button>`
       : "";
   return `
@@ -665,6 +665,17 @@ function paintCard(el, t) {
 async function archiveTask(t) {
   if (!confirm(`Отправить «${t.title}» в архив?`)) return;
   const q = state.meId ? `?actor_id=${state.meId}` : "";
+  // из «в работе» — сначала отметить выполненной, тему не трогаем
+  if (t.status === "doing") {
+    await api(`/api/tasks/${t.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "done",
+        actor_id: state.meId || null,
+        ...(t.theme_id != null ? { theme_id: t.theme_id } : {}),
+      }),
+    });
+  }
   await api(`/api/tasks/${t.id}/archive${q}`, { method: "POST" });
   await load();
 }
@@ -746,10 +757,17 @@ function boardThemes() {
 
 function themeLanes(tasksInCol) {
   const themes = boardThemes();
-  const used = new Set(tasksInCol.map((t) => t.theme_id).filter(Boolean));
+  const usedHere = new Set(tasksInCol.map((t) => t.theme_id).filter(Boolean));
+  // темы из «в работе» и «выполнено» — чтобы пустая колонка всё равно приняла ту же тему
+  const usedBoard = new Set(
+    (state.board?.tasks || [])
+      .filter((t) => t.status === "doing" || t.status === "done")
+      .map((t) => t.theme_id)
+      .filter(Boolean)
+  );
+  const used = new Set([...usedHere, ...usedBoard]);
   const hasUnthemed = tasksInCol.some((t) => !t.theme_id);
   const lanes = [];
-  // пустые темы не показываем — только те, где уже есть задачи
   for (const th of themes) {
     if (used.has(th.id)) {
       lanes.push({ id: th.id, title: th.title, is_system: !!th.is_system });
@@ -772,7 +790,7 @@ function appendCard(host, t) {
   host.appendChild(card);
 }
 
-function bindDropZone(el, { status, themeId }) {
+function bindDropZone(el, { status, themeId, keepTheme = false }) {
   el.addEventListener("dragover", (e) => {
     e.preventDefault();
     el.classList.add("drag-over");
@@ -784,9 +802,13 @@ function bindDropZone(el, { status, themeId }) {
     el.classList.remove("drag-over");
     const id = Number(state.dragId || e.dataTransfer.getData("text/plain"));
     if (!id) return;
+    const prev = state.board?.tasks?.find((t) => Number(t.id) === id);
     const body = { status, actor_id: state.meId || null };
     if (status === "todo") {
       body.theme_id = null;
+    } else if (keepTheme) {
+      // пустая колонка — оставляем ту же тему, что была у задачи
+      if (prev && prev.theme_id != null) body.theme_id = prev.theme_id;
     } else if (themeId !== undefined) {
       body.theme_id = themeId;
     }
@@ -823,11 +845,11 @@ function renderBoard() {
     } else {
       const lanes = themeLanes(list);
       if (!lanes.length) {
-        // колонка пуста — одна зона сброса без заголовков тем
+        // колонка пуста — сброс статуса, тему не трогаем
         const cards = document.createElement("div");
         cards.className = "cards theme-cards";
         cards.dataset.status = col.id;
-        bindDropZone(cards, { status: col.id, themeId: null });
+        bindDropZone(cards, { status: col.id, keepTheme: true });
         colEl.appendChild(cards);
       } else {
         const lanesWrap = document.createElement("div");
@@ -1159,6 +1181,7 @@ async function renderArchive() {
       <div class="meta">
         ${t.completed_at ? `<span class="chip">${formatDt(t.completed_at)}</span>` : ""}
         ${t.completed_by_name ? `<span class="chip">${escapeHtml(t.completed_by_name)}</span>` : ""}
+        ${t.theme_title ? `<span class="chip theme">${escapeHtml(t.theme_title)}</span>` : ""}
         ${t.articles ? `<span class="chip project">${escapeHtml(t.articles)}</span>` : ""}
       </div>
     `;

@@ -117,6 +117,7 @@ async def list_archive_tasks(
                 .options(
                     selectinload(Task.assignee),
                     selectinload(Task.project),
+                    selectinload(Task.theme),
                     selectinload(Task.created_by),
                     selectinload(Task.completed_by),
                     selectinload(Task.assignees).selectinload(TaskAssignee.employee),
