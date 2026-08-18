@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.catalog import load_catalog
 from app.config import get_settings
 from app.db import SessionLocal, get_session
-from app.job_titles import JOB_TITLE_SET
+from app.job_titles import JOB_TITLE_SET, sees_project_team
 from app.models import (
     Employee,
     EmployeeAccess,
@@ -85,7 +85,9 @@ async def _employee_out(session: AsyncSession, emp: Employee) -> EmployeeOut:
 
 
 def _norm_job_title(value: str | None) -> str:
-    return (value or "").strip().lower().replace("ё", "е")
+    from app.job_titles import norm_job_title
+
+    return norm_job_title(value)
 
 
 async def _visible_subject_ids(
@@ -93,14 +95,14 @@ async def _visible_subject_ids(
 ) -> set[int] | None:
     """None = все (владелец). Иначе id сотрудников, чьи задачи видны.
 
-    Партнёр в проекте видит всех людей своей команды (team_group).
+    Партнёр и рук в проекте видят всех людей своей команды (team_group).
     """
     if viewer.role == "owner":
         return None
     granted = await _can_see_ids(session, viewer.id)
     ids: set[int] = {viewer.id, *granted}
     team = (viewer.team_group or "").strip()
-    if _norm_job_title(viewer.job_title) == "партнер" and team:
+    if sees_project_team(viewer.job_title) and team:
         teammates = (
             await session.scalars(
                 select(Employee.id).where(

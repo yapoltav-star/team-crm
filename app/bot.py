@@ -33,6 +33,7 @@ from app.audience import (
     strip_audience_from_title,
 )
 from app.config import Settings
+from app.job_titles import can_reassign_tasks, norm_job_title
 from app.models import Employee, Task, TaskAssignee, TaskRun
 from app.notify import (
     ask_comment_kb,
@@ -1443,7 +1444,11 @@ def build_dispatcher(
                         run_id_final,
                         task_id,
                         status="doing",
-                        can_reassign=uid == int(settings.owner_telegram_id),
+                        can_reassign=can_reassign_tasks(
+                            role=actor.role if actor else None,
+                            job_title=actor.job_title if actor else None,
+                        )
+                        or uid == int(settings.owner_telegram_id),
                     ),
                 )
             except Exception:  # noqa: BLE001
@@ -1451,12 +1456,10 @@ def build_dispatcher(
 
     @dp.callback_query(F.data.startswith("ra:"))
     async def on_reassign(callback: CallbackQuery) -> None:
-        """Владелец: перекинуть задачу на менеджера одной кнопкой."""
+        """Владелец или рук: перекинуть задачу на менеджера одной кнопкой."""
         if not callback.data or not callback.from_user:
             return
-        if int(callback.from_user.id) != int(settings.owner_telegram_id):
-            await callback.answer("Только владелец может перекидывать", show_alert=True)
-            return
+        uid = int(callback.from_user.id)
         parts = callback.data.split(":")
         # ra:pick:{task_id} | ra:back:{task_id} | ra:do:{task_id}:{emp_id}
         if len(parts) < 3:
@@ -1470,6 +1473,18 @@ def build_dispatcher(
             return
 
         async with session_factory() as session:
+            actor = await find_employee(session, uid)
+            is_owner_tg = uid == int(settings.owner_telegram_id)
+            allow = is_owner_tg or (
+                actor is not None
+                and can_reassign_tasks(role=actor.role, job_title=actor.job_title)
+            )
+            if not allow:
+                await callback.answer(
+                    "Перекидывать могут владелец и рук", show_alert=True
+                )
+                return
+
             task = await session.get(
                 Task,
                 task_id,
@@ -1485,15 +1500,20 @@ def build_dispatcher(
 
             if action in {"pick", "back"}:
                 if action == "pick":
+                    q = select(Employee).where(
+                        Employee.active.is_(True),
+                        Employee.role != "owner",
+                    )
+                    if (
+                        actor
+                        and not is_owner_tg
+                        and norm_job_title(actor.job_title) == "рук"
+                    ):
+                        team = (actor.team_group or "").strip()
+                        if team:
+                            q = q.where(Employee.team_group == team)
                     managers = (
-                        await session.scalars(
-                            select(Employee)
-                            .where(
-                                Employee.active.is_(True),
-                                Employee.role != "owner",
-                            )
-                            .order_by(Employee.name.asc())
-                        )
+                        await session.scalars(q.order_by(Employee.name.asc()))
                     ).all()
                     if not managers:
                         await callback.answer("Нет менеджеров в команде", show_alert=True)
@@ -1542,10 +1562,18 @@ def build_dispatcher(
             if not emp or not emp.active or emp.role == "owner":
                 await callback.answer("Менеджер не найден", show_alert=True)
                 return
+            if (
+                actor
+                and not is_owner_tg
+                and norm_job_title(actor.job_title) == "рук"
+            ):
+                team = (actor.team_group or "").strip()
+                if team and (emp.team_group or "").strip() != team:
+                    await callback.answer("Только свой проект", show_alert=True)
+                    return
 
             from app.tasks_service import add_event, set_assignees
 
-            actor = await find_employee(session, int(callback.from_user.id))
             await set_assignees(
                 session,
                 task,

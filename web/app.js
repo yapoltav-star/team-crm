@@ -262,12 +262,28 @@ function isOwner() {
   return me()?.role === "owner";
 }
 
-function isPartner() {
-  const t = String(me()?.job_title || "")
+function normJobTitle(value) {
+  return String(value || "")
     .trim()
     .toLowerCase()
     .replaceAll("ё", "е");
-  return t === "партнер";
+}
+
+function isPartner() {
+  return normJobTitle(me()?.job_title) === "партнер";
+}
+
+function isRuk() {
+  return normJobTitle(me()?.job_title) === "рук";
+}
+
+/** Партнёр и рук видят всех на своём проекте */
+function seesProjectTeam() {
+  return isPartner() || isRuk();
+}
+
+function canReassignTasks() {
+  return isOwner() || isRuk();
 }
 
 function visiblePeople() {
@@ -275,8 +291,8 @@ function visiblePeople() {
   if (isOwner()) return all;
   const m = me();
   if (!m) return [];
-  // партнёр видит всех в своём проекте (слева и их задачи)
-  if (isPartner()) {
+  // партнёр и рук видят всех в своём проекте (слева и их задачи)
+  if (seesProjectTeam()) {
     const team = String(m.team_group || "").trim();
     if (team) {
       return all.filter(
@@ -1459,18 +1475,26 @@ async function openTaskDialog(taskId) {
 
 function managersForReassign(task) {
   const current = new Set(taskAssigneeIds(task));
-  return people().filter(
-    (e) =>
-      e.active !== false &&
-      e.role !== "owner" &&
-      !current.has(Number(e.id))
-  );
+  let pool = people().filter((e) => e.active !== false && e.role !== "owner");
+  // рук / партнёр — только свой проект
+  if (seesProjectTeam()) {
+    const team = String(me()?.team_group || "").trim();
+    if (team) {
+      pool = pool.filter((e) => String(e.team_group || "").trim() === team);
+    }
+  }
+  return pool.filter((e) => !current.has(Number(e.id)));
 }
 
 function renderReassignButtons(task) {
   const bar = $("#reassignBar");
   const box = $("#reassignButtons");
   if (!bar || !box) return;
+  if (!canReassignTasks()) {
+    bar.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
   const managers = managersForReassign(task);
   if (!managers.length) {
     bar.classList.add("hidden");

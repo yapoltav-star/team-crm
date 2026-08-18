@@ -245,6 +245,7 @@ async def notify_task_assignee(
     )
 
     from app.config import get_settings
+    from app.job_titles import can_reassign_tasks
 
     settings = get_settings()
     owner_tg = int(settings.owner_telegram_id or 0)
@@ -257,6 +258,9 @@ async def notify_task_assignee(
             continue
         try:
             is_owner = owner_tg and int(emp.telegram_id) == owner_tg
+            allow_reassign = is_owner or can_reassign_tasks(
+                role=emp.role, job_title=emp.job_title
+            )
             await bot.send_message(
                 int(emp.telegram_id),
                 text,
@@ -264,7 +268,7 @@ async def notify_task_assignee(
                     int(run.id),
                     int(task.id),
                     status=task.status or "todo",
-                    can_reassign=bool(is_owner),
+                    can_reassign=bool(allow_reassign),
                 ),
                 parse_mode="HTML",
             )
