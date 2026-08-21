@@ -1745,15 +1745,6 @@ def build_dispatcher(
             if not emp or not emp.active or emp.role == "owner":
                 await callback.answer("Менеджер не найден", show_alert=True)
                 return
-            if (
-                actor
-                and not is_owner_tg
-                and norm_job_title(actor.job_title) == "рук"
-            ):
-                team = (actor.team_group or "").strip()
-                if team and (emp.team_group or "").strip() != team:
-                    await callback.answer("Только свой проект", show_alert=True)
-                    return
 
             from app.tasks_service import add_event, set_assignees
 
