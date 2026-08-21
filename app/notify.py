@@ -123,6 +123,119 @@ def my_tasks_done_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def person_tasks_nudge_kb(
+    tasks: list[Task], *, list_owner_id: int
+) -> InlineKeyboardMarkup:
+    """Кнопки «напомнить» — владелец смотрит чужие задачи."""
+    status_mark = {"todo": "🆕", "doing": "🔵", "done": "✅"}
+    rows: list[list[InlineKeyboardButton]] = []
+    for t in tasks[:20]:
+        mark = status_mark.get(t.status or "todo", "📋")
+        label = (t.title or f"#{t.id}").strip()
+        if len(label) > 30:
+            label = label[:29] + "…"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark} #{t.id} {label}",
+                    callback_data=f"nudge:{t.id}:{int(list_owner_id)}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def nudge_task_assignee(
+    *,
+    bot: Bot | None,
+    session: AsyncSession,
+    task: Task,
+    actor: Employee,
+    due: date | None = None,
+) -> tuple[bool, str | None]:
+    """Повторно пингануть исполнителей: владелец спрашивает и ждёт решения."""
+    if not bot:
+        return False, "Бот не запущен на сервере"
+    targets = _targets(task)
+    if not targets:
+        return False, "У задачи нет исполнителя"
+
+    from app.config import get_settings
+    from app.job_titles import can_reassign_tasks
+    from app.tasks_service import add_event
+
+    settings = get_settings()
+    owner_tg = int(settings.owner_telegram_id or 0)
+    due_d = due or task.due_date or datetime.now(settings.tz).date()
+    run = await ensure_run(session, task.id, due_d)
+    if not run.id:
+        await session.refresh(run)
+
+    sku_line = ""
+    if (task.articles or "").strip():
+        codes = ", ".join(x.strip() for x in task.articles.split(",") if x.strip())
+        sku_line = f"\nАртикул: <code>{codes}</code>"
+    due_line = format_due(task.due_date or due_d)
+    status_ru = {"todo": "новая", "doing": "в работе", "done": "выполнена"}.get(
+        task.status or "todo", task.status or ""
+    )
+    text = (
+        f"⏳ <b>{actor.name}</b> спрашивает по задаче и ждёт решения\n"
+        f"<b>#{task.id} {task.title}</b>{sku_line}{due_line}\n"
+        f"Сейчас: <i>{status_ru}</i>\n\n"
+        "Ответь: «В работе», «Сделано» или «Комментарий»."
+    )
+
+    errors: list[str] = []
+    sent = 0
+    for emp in targets:
+        if not emp.telegram_id:
+            errors.append(f"{emp.name}: нет Telegram id")
+            continue
+        # не пинговать самого спрашивающего, если он в исполнителях
+        if int(emp.telegram_id) == int(actor.telegram_id or 0):
+            continue
+        try:
+            is_owner = owner_tg and int(emp.telegram_id) == owner_tg
+            allow_reassign = is_owner or can_reassign_tasks(
+                role=emp.role, job_title=emp.job_title
+            )
+            await bot.send_message(
+                int(emp.telegram_id),
+                text,
+                reply_markup=task_action_kb(
+                    int(run.id),
+                    int(task.id),
+                    status=task.status or "todo",
+                    can_reassign=bool(allow_reassign),
+                ),
+                parse_mode="HTML",
+            )
+            sent += 1
+        except TelegramForbiddenError:
+            errors.append(f"{emp.name}: не нажал /start")
+        except (TelegramBadRequest, TelegramAPIError) as exc:
+            errors.append(f"{emp.name}: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("nudge failed task=%s user=%s", task.id, emp.telegram_id)
+            errors.append(f"{emp.name}: {exc}")
+
+    if sent:
+        await add_event(
+            session,
+            task.id,
+            f"{actor.name} напомнил(а) и ждёт решения",
+            kind="nudge",
+            actor_id=actor.id,
+        )
+        await session.commit()
+    if sent and not errors:
+        return True, None
+    if sent:
+        return True, "; ".join(errors)
+    return False, "; ".join(errors) if errors else "не удалось отправить"
+
+
 def theme_pick_kb(
     task_id: int,
     themes: list,

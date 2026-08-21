@@ -42,6 +42,8 @@ from app.notify import (
     my_tasks_done_kb,
     notify_task_assignee,
     notify_task_comment,
+    nudge_task_assignee,
+    person_tasks_nudge_kb,
     reassign_pick_kb,
     resolve_run,
     save_task_comment,
@@ -431,10 +433,24 @@ async def load_open_tasks_for(
     ]
 
 
-def format_person_tasks_text(assignee: Employee, tasks: list[Task]) -> str:
+def format_person_tasks_text(
+    assignee: Employee,
+    tasks: list[Task],
+    *,
+    mode: str = "done",
+) -> str:
     if not tasks:
         return f"У {assignee.name} открытых задач нет."
-    lines = [f"Задачи — {assignee.name} ({len(tasks)}):", "Нажми ✅ чтобы отметить выполненной."]
+    if mode == "nudge":
+        lines = [
+            f"Задачи — {assignee.name} ({len(tasks)}):",
+            "Нажми на задачу — напомню сотруднику, что ты спрашиваешь и ждёшь решения.",
+        ]
+    else:
+        lines = [
+            f"Задачи — {assignee.name} ({len(tasks)}):",
+            "Нажми ✅ чтобы отметить выполненной.",
+        ]
     for t in tasks:
         st = STATUS_RU.get(t.status, t.status)
         author = f" (от {t.created_by.name})" if t.created_by else ""
@@ -617,7 +633,8 @@ def build_dispatcher(
 
     help_common = (
         "Можно писать обычным текстом или голосом.\n"
-        "Например: «у кого какие задачи», «что у Ивана».\n"
+        "Например: «у кого какие задачи», «что у Ивана», «задачи Вячеслава».\n"
+        "По чужому списку можно нажать задачу — бот напомнит человеку, что ждёшь решения.\n"
         "Команды:\n"
         "/todo текст — себе\n"
         "/boss текст — владельцу\n"
@@ -888,10 +905,25 @@ def build_dispatcher(
         edit_message: Message | None = None,
         assignee: Employee,
         session: AsyncSession,
+        viewer: Employee | None = None,
     ) -> None:
         tasks = await load_open_tasks_for(session, assignee)
-        text = format_person_tasks_text(assignee, tasks)
-        kb = my_tasks_done_kb(tasks, list_owner_id=assignee.id) if tasks else None
+        who = viewer or assignee
+        can_nudge = (
+            who.id != assignee.id
+            and (
+                int(who.telegram_id or 0) == int(settings.owner_telegram_id)
+                or can_reassign_tasks(role=who.role, job_title=who.job_title)
+            )
+        )
+        mode = "nudge" if can_nudge else "done"
+        text = format_person_tasks_text(assignee, tasks, mode=mode)
+        if not tasks:
+            kb = None
+        elif mode == "nudge":
+            kb = person_tasks_nudge_kb(tasks, list_owner_id=assignee.id)
+        else:
+            kb = my_tasks_done_kb(tasks, list_owner_id=assignee.id)
         if edit_message is not None:
             try:
                 await edit_message.edit_text(text, reply_markup=kb)
@@ -911,7 +943,9 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Нет доступа.")
                 return
-            await _send_my_tasks(message=message, assignee=emp, session=session)
+            await _send_my_tasks(
+                message=message, assignee=emp, session=session, viewer=emp
+            )
 
     @dp.message(Command("team"))
     async def cmd_team(message: Message) -> None:
@@ -1342,6 +1376,7 @@ def build_dispatcher(
                         edit_message=callback.message,
                         assignee=list_owner,
                         session=session,
+                        viewer=actor,
                     )
                 return
             if uid not in _task_allowed_ids(task):
@@ -1366,6 +1401,7 @@ def build_dispatcher(
                 edit_message=callback.message,
                 assignee=list_owner,
                 session=session,
+                viewer=actor,
             )
             notify_ids = {int(settings.owner_telegram_id)}
             if creator_tg is not None:
@@ -1379,6 +1415,77 @@ def build_dispatcher(
                     )
                 except Exception:  # noqa: BLE001
                     pass
+
+    @dp.callback_query(F.data.startswith("nudge:"))
+    async def on_nudge(callback: CallbackQuery) -> None:
+        """Владелец/рук: напомнить исполнителю, что спрашивают и ждут решения."""
+        if not callback.data or not callback.from_user:
+            return
+        parts = callback.data.split(":")
+        try:
+            task_id = int(parts[1])
+            list_owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        except (ValueError, IndexError):
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        uid = int(callback.from_user.id)
+        async with session_factory() as session:
+            actor = await find_employee(session, uid)
+            if not actor:
+                await callback.answer("Нет доступа", show_alert=True)
+                return
+            is_owner = uid == int(settings.owner_telegram_id)
+            if not is_owner and not can_reassign_tasks(
+                role=actor.role, job_title=actor.job_title
+            ):
+                await callback.answer("Только владелец / рук", show_alert=True)
+                return
+            list_owner = (
+                await session.get(Employee, list_owner_id)
+                if list_owner_id
+                else None
+            )
+            task = (
+                await session.scalars(
+                    select(Task)
+                    .where(Task.id == task_id, Task.active.is_(True))
+                    .options(
+                        selectinload(Task.assignee),
+                        selectinload(Task.created_by),
+                        selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+                    )
+                )
+            ).first()
+            if not task or task.status == "done":
+                await callback.answer("Задача уже закрыта или не найдена", show_alert=True)
+                if callback.message and list_owner:
+                    await _send_my_tasks(
+                        edit_message=callback.message,
+                        assignee=list_owner,
+                        session=session,
+                        viewer=actor,
+                    )
+                return
+            ok, err = await nudge_task_assignee(
+                bot=callback.bot,
+                session=session,
+                task=task,
+                actor=actor,
+            )
+            if ok:
+                await callback.answer("Напомнил ✅", show_alert=False)
+                if callback.message:
+                    try:
+                        await callback.message.answer(
+                            f"⏳ Напомнил по #{task.id}: <b>{task.title}</b>\n"
+                            f"Сообщил, что ты спрашиваешь и ждёшь решения."
+                            + (f"\n({err})" if err else ""),
+                            parse_mode="HTML",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+            else:
+                await callback.answer(err or "Не отправилось", show_alert=True)
 
     @dp.callback_query(F.data.startswith("thp:"))
     async def on_theme_pick(callback: CallbackQuery) -> None:
@@ -2011,6 +2118,7 @@ def build_dispatcher(
                             edit_message=wait,
                             assignee=author,
                             session=session,
+                            viewer=author,
                         )
                         return
                     person = _match_assignee(list(people), who, author)
@@ -2019,12 +2127,13 @@ def build_dispatcher(
                             f"Не нашёл «{who}» в команде. Спроси «у кого какие задачи» или назови имя точно."
                         )
                         return
-                    # чужие задачи — тоже с кнопками, если смотришь конкретного человека
+                    # чужие задачи: владельцу/руку — кнопки «напомнить»
                     await _send_my_tasks(
                         message=message,
                         edit_message=wait,
                         assignee=person,
                         session=session,
+                        viewer=author,
                     )
                     return
                 if action in {"edit_task", "delete_task", "complete_task"}:
