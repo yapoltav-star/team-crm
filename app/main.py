@@ -342,7 +342,7 @@ async def health() -> dict:
     settings = get_settings()
     return {
         "ok": True,
-        "build": "team-nudge-all-2026-08-21",
+        "build": "partner-ruk-visibility-2026-08-21",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "auth": bool(str(settings.web_password or "").strip()),

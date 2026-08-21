@@ -33,7 +33,7 @@ from app.audience import (
     strip_audience_from_title,
 )
 from app.config import Settings
-from app.job_titles import can_reassign_tasks, norm_job_title
+from app.job_titles import can_nudge_tasks, can_reassign_tasks, can_view_all_employees, norm_job_title
 from app.models import Employee, Task, TaskAssignee, TaskRun
 from app.notify import (
     ask_comment_kb,
@@ -53,6 +53,7 @@ from app.notify import (
 )
 from app.themes import ensure_system_themes, themes_for_employee
 from app.tasks_service import resolve_due_date
+from app.visibility import can_view_person, load_visible_employees, visible_subject_ids
 
 logger = logging.getLogger("crm-bot")
 
@@ -635,7 +636,8 @@ def build_dispatcher(
     help_common = (
         "Можно писать обычным текстом или голосом.\n"
         "Например: «у кого какие задачи», «что у Ивана», «задачи Софии».\n"
-        "По любому сотруднику: список со статусами → нажми задачу, чтобы напомнить.\n"
+        "По любому доступному сотруднику: список → нажми задачу, чтобы напомнить.\n"
+        "Партнёр — сотрудники своего проекта; рук — все; владелец — все.\n"
         "Команды:\n"
         "/todo текст — себе\n"
         "/boss текст — владельцу\n"
@@ -910,21 +912,25 @@ def build_dispatcher(
     ) -> None:
         tasks = await load_open_tasks_for(session, assignee)
         who = viewer or assignee
-        can_nudge = (
-            who.id != assignee.id
-            and (
-                int(who.telegram_id or 0) == int(settings.owner_telegram_id)
-                or can_reassign_tasks(role=who.role, job_title=who.job_title)
-            )
-        )
-        mode = "nudge" if can_nudge else "done"
-        text = format_person_tasks_text(assignee, tasks, mode=mode)
-        if not tasks:
+        subject_ids = await visible_subject_ids(session, who)
+        allowed = can_view_person(who, assignee, subject_ids=subject_ids)
+        if not allowed:
+            text = "Нет доступа к задачам этого сотрудника."
             kb = None
-        elif mode == "nudge":
-            kb = person_tasks_nudge_kb(tasks, list_owner_id=assignee.id)
         else:
-            kb = my_tasks_done_kb(tasks, list_owner_id=assignee.id)
+            can_nudge = (
+                who.id != assignee.id
+                and can_nudge_tasks(role=who.role, job_title=who.job_title)
+                and allowed
+            )
+            mode = "nudge" if can_nudge else "done"
+            text = format_person_tasks_text(assignee, tasks, mode=mode)
+            if not tasks:
+                kb = None
+            elif mode == "nudge":
+                kb = person_tasks_nudge_kb(tasks, list_owner_id=assignee.id)
+            else:
+                kb = my_tasks_done_kb(tasks, list_owner_id=assignee.id)
         if edit_message is not None:
             try:
                 await edit_message.edit_text(text, reply_markup=kb)
@@ -942,26 +948,32 @@ def build_dispatcher(
         viewer: Employee,
         session: AsyncSession,
     ) -> None:
-        people = list(
-            (
-                await session.scalars(
-                    select(Employee)
-                    .where(Employee.active.is_(True))
-                    .order_by(Employee.name)
-                )
-            ).all()
-        )
+        people = await load_visible_employees(session, viewer)
         text = await format_open_tasks(session, people=people)
-        can_pick = int(viewer.telegram_id or 0) == int(
-            settings.owner_telegram_id
-        ) or can_reassign_tasks(role=viewer.role, job_title=viewer.job_title)
+        can_pick = can_nudge_tasks(role=viewer.role, job_title=viewer.job_title)
         others = [p for p in people if p.id != viewer.id]
         kb = team_people_kb(others) if can_pick and others else None
         if can_pick and others:
+            scope = (
+                "всем сотрудникам"
+                if can_view_all_employees(role=viewer.role, job_title=viewer.job_title)
+                else f"проекту «{(viewer.team_group or '').strip() or '—'}»"
+            )
             text = (
                 text
-                + "\n\nНажми имя сотрудника — открою его задачи (можно напомнить)."
+                + f"\n\nДоступ: {scope}. "
+                "Нажми имя — открою задачи (можно напомнить)."
             )
+        elif can_nudge_tasks(role=viewer.role, job_title=viewer.job_title) and not others:
+            team = (viewer.team_group or "").strip()
+            if not team and not can_view_all_employees(
+                role=viewer.role, job_title=viewer.job_title
+            ):
+                text = (
+                    text
+                    + "\n\nУ тебя не указан проект (team_group) — "
+                    "попроси владельца назначить проект, чтобы видеть команду."
+                )
         if edit_message is not None:
             try:
                 await edit_message.edit_text(text, reply_markup=kb)
@@ -1466,15 +1478,16 @@ def build_dispatcher(
             if not actor:
                 await callback.answer("Нет доступа", show_alert=True)
                 return
-            is_owner = uid == int(settings.owner_telegram_id)
-            if not is_owner and not can_reassign_tasks(
-                role=actor.role, job_title=actor.job_title
-            ):
-                await callback.answer("Только владелец / рук", show_alert=True)
+            if not can_nudge_tasks(role=actor.role, job_title=actor.job_title):
+                await callback.answer("Нет доступа", show_alert=True)
                 return
             person = await session.get(Employee, emp_id)
             if not person or not person.active:
                 await callback.answer("Сотрудник не найден", show_alert=True)
+                return
+            subject_ids = await visible_subject_ids(session, actor)
+            if not can_view_person(actor, person, subject_ids=subject_ids):
+                await callback.answer("Нет доступа к этому сотруднику", show_alert=True)
                 return
             await callback.answer()
             await _send_my_tasks(
@@ -1487,7 +1500,7 @@ def build_dispatcher(
 
     @dp.callback_query(F.data.startswith("nudge:"))
     async def on_nudge(callback: CallbackQuery) -> None:
-        """Владелец/рук: напомнить исполнителю, что спрашивают и ждут решения."""
+        """Владелец/рук/партнёр: напомнить исполнителю, что спрашивают и ждут решения."""
         if not callback.data or not callback.from_user:
             return
         parts = callback.data.split(":")
@@ -1503,17 +1516,19 @@ def build_dispatcher(
             if not actor:
                 await callback.answer("Нет доступа", show_alert=True)
                 return
-            is_owner = uid == int(settings.owner_telegram_id)
-            if not is_owner and not can_reassign_tasks(
-                role=actor.role, job_title=actor.job_title
-            ):
-                await callback.answer("Только владелец / рук", show_alert=True)
+            if not can_nudge_tasks(role=actor.role, job_title=actor.job_title):
+                await callback.answer("Нет доступа", show_alert=True)
                 return
             list_owner = (
                 await session.get(Employee, list_owner_id)
                 if list_owner_id
                 else None
             )
+            if list_owner:
+                subject_ids = await visible_subject_ids(session, actor)
+                if not can_view_person(actor, list_owner, subject_ids=subject_ids):
+                    await callback.answer("Нет доступа", show_alert=True)
+                    return
             task = (
                 await session.scalars(
                     select(Task)
@@ -1680,14 +1695,6 @@ def build_dispatcher(
                         Employee.active.is_(True),
                         Employee.role != "owner",
                     )
-                    if (
-                        actor
-                        and not is_owner_tg
-                        and norm_job_title(actor.job_title) == "рук"
-                    ):
-                        team = (actor.team_group or "").strip()
-                        if team:
-                            q = q.where(Employee.team_group == team)
                     managers = (
                         await session.scalars(q.order_by(Employee.name.asc()))
                     ).all()
@@ -2039,6 +2046,7 @@ def build_dispatcher(
                 from app.nlp import parse_intent
 
                 is_owner = message.from_user.id == settings.owner_telegram_id
+                visible_people = await load_visible_employees(session, author)
                 named_early = find_named_assignees(
                     task_text, list(people), author=author
                 )
@@ -2090,9 +2098,11 @@ def build_dispatcher(
                                 "job_title": p.job_title or "",
                                 "team_group": p.team_group or "",
                             }
-                            for p in people
+                            for p in visible_people
                         ],
                         is_owner=is_owner,
+                        job_title=author.job_title or "",
+                        team_group=author.team_group or "",
                     )
                 action = intent.get("action")
                 if action == "create_task":
@@ -2194,13 +2204,22 @@ def build_dispatcher(
                             viewer=author,
                         )
                         return
-                    person = _match_assignee(list(people), who, author)
+                    person = _match_assignee(
+                        await load_visible_employees(session, author), who, author
+                    )
                     if not person:
-                        await wait.edit_text(
-                            f"Не нашёл «{who}» в команде. Спроси «у кого какие задачи» или назови имя точно."
-                        )
+                        outsider = _match_assignee(list(people), who, author)
+                        if outsider:
+                            await wait.edit_text(
+                                f"«{who}» вне твоей зоны видимости "
+                                f"(партнёр видит только свой проект)."
+                            )
+                        else:
+                            await wait.edit_text(
+                                f"Не нашёл «{who}» в команде. "
+                                "Спроси «у кого какие задачи» или назови имя точно."
+                            )
                         return
-                    # чужие задачи: владельцу/руку — кнопки «напомнить»
                     await _send_my_tasks(
                         message=message,
                         edit_message=wait,

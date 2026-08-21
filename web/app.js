@@ -277,9 +277,9 @@ function isRuk() {
   return normJobTitle(me()?.job_title) === "рук";
 }
 
-/** Партнёр и рук видят всех на своём проекте */
+/** Партнёр видит всех на своём проекте */
 function seesProjectTeam() {
-  return isPartner() || isRuk();
+  return isPartner();
 }
 
 function canReassignTasks() {
@@ -288,10 +288,10 @@ function canReassignTasks() {
 
 function visiblePeople() {
   const all = people();
-  if (isOwner()) return all;
+  if (isOwner() || isRuk()) return all;
   const m = me();
   if (!m) return [];
-  // партнёр и рук видят всех в своём проекте (слева и их задачи)
+  // партнёр видит всех в своём проекте (слева и их задачи)
   if (seesProjectTeam()) {
     const team = String(m.team_group || "").trim();
     if (team) {

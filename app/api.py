@@ -11,7 +11,8 @@ from sqlalchemy.orm import selectinload
 from app.catalog import load_catalog
 from app.config import get_settings
 from app.db import SessionLocal, get_session
-from app.job_titles import JOB_TITLE_SET, sees_project_team
+from app.job_titles import JOB_TITLE_SET
+from app.visibility import visible_subject_ids as _visible_subject_ids
 from app.models import (
     Employee,
     EmployeeAccess,
@@ -63,12 +64,9 @@ router = APIRouter(prefix="/api")
 
 
 async def _can_see_ids(session: AsyncSession, viewer_id: int) -> list[int]:
-    rows = (
-        await session.scalars(
-            select(EmployeeAccess.subject_id).where(EmployeeAccess.viewer_id == viewer_id)
-        )
-    ).all()
-    return [int(x) for x in rows]
+    from app.visibility import can_see_grant_ids
+
+    return await can_see_grant_ids(session, viewer_id)
 
 
 async def _employee_out(session: AsyncSession, emp: Employee) -> EmployeeOut:
@@ -90,29 +88,7 @@ def _norm_job_title(value: str | None) -> str:
     return norm_job_title(value)
 
 
-async def _visible_subject_ids(
-    session: AsyncSession, viewer: Employee
-) -> set[int] | None:
-    """None = все (владелец). Иначе id сотрудников, чьи задачи видны.
-
-    Партнёр и рук в проекте видят всех людей своей команды (team_group).
-    """
-    if viewer.role == "owner":
-        return None
-    granted = await _can_see_ids(session, viewer.id)
-    ids: set[int] = {viewer.id, *granted}
-    team = (viewer.team_group or "").strip()
-    if sees_project_team(viewer.job_title) and team:
-        teammates = (
-            await session.scalars(
-                select(Employee.id).where(
-                    Employee.active.is_(True),
-                    Employee.team_group == team,
-                )
-            )
-        ).all()
-        ids.update(int(x) for x in teammates)
-    return ids
+# _visible_subject_ids импортирован из app.visibility
 
 
 def _task_matches_subjects(task: Task, subject_ids: set[int]) -> bool:
@@ -306,7 +282,7 @@ async def board(
     if subject_ids is not None:
         tasks = [t for t in tasks if _task_visible_to(t, viewer, subject_ids)]
 
-    emp_source = all_employees if viewer.role == "owner" else visible_employees
+    emp_source = all_employees if subject_ids is None else visible_employees
     emp_outs = [await _employee_out(session, e) for e in emp_source]
     themes = await themes_for_employee(session, viewer.id)
     # плюс чужие личные темы, если на доске уже есть задачи с ними
