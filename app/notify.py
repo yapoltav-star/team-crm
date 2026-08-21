@@ -145,6 +145,28 @@ def person_tasks_nudge_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def team_people_kb(people: list[Employee]) -> InlineKeyboardMarkup:
+    """Кнопки сотрудников — открыть их задачи (напомнить)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for emp in people[:24]:
+        if not emp.active:
+            continue
+        label = (emp.name or f"#{emp.id}")[:22]
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"plist:{int(emp.id)}",
+            )
+        )
+        if len(row) >= 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def nudge_task_assignee(
     *,
     bot: Bot | None,

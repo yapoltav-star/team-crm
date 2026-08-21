@@ -48,6 +48,7 @@ from app.notify import (
     resolve_run,
     save_task_comment,
     task_action_kb,
+    team_people_kb,
     theme_pick_kb,
 )
 from app.themes import ensure_system_themes, themes_for_employee
@@ -633,15 +634,15 @@ def build_dispatcher(
 
     help_common = (
         "Можно писать обычным текстом или голосом.\n"
-        "Например: «у кого какие задачи», «что у Ивана», «задачи Вячеслава».\n"
-        "По чужому списку можно нажать задачу — бот напомнит человеку, что ждёшь решения.\n"
+        "Например: «у кого какие задачи», «что у Ивана», «задачи Софии».\n"
+        "По любому сотруднику: список со статусами → нажми задачу, чтобы напомнить.\n"
         "Команды:\n"
         "/todo текст — себе\n"
         "/boss текст — владельцу\n"
         "/for <id> | текст — человеку\n"
         "Или текстом: «поставь задачу всем проверить отзывы»\n"
         "/my — мои открытые\n"
-        "/team — у кого что\n"
+        "/team — у кого что (+ кнопки сотрудников)\n"
         "/name Имя — как тебя зовут в CRM\n"
     )
 
@@ -934,6 +935,43 @@ def build_dispatcher(
         if message:
             await message.answer(text, reply_markup=kb)
 
+    async def _send_team_overview(
+        *,
+        message: Message | None = None,
+        edit_message: Message | None = None,
+        viewer: Employee,
+        session: AsyncSession,
+    ) -> None:
+        people = list(
+            (
+                await session.scalars(
+                    select(Employee)
+                    .where(Employee.active.is_(True))
+                    .order_by(Employee.name)
+                )
+            ).all()
+        )
+        text = await format_open_tasks(session, people=people)
+        can_pick = int(viewer.telegram_id or 0) == int(
+            settings.owner_telegram_id
+        ) or can_reassign_tasks(role=viewer.role, job_title=viewer.job_title)
+        others = [p for p in people if p.id != viewer.id]
+        kb = team_people_kb(others) if can_pick and others else None
+        if can_pick and others:
+            text = (
+                text
+                + "\n\nНажми имя сотрудника — открою его задачи (можно напомнить)."
+            )
+        if edit_message is not None:
+            try:
+                await edit_message.edit_text(text, reply_markup=kb)
+            except Exception:  # noqa: BLE001
+                if message:
+                    await message.answer(text, reply_markup=kb)
+            return
+        if message:
+            await message.answer(text, reply_markup=kb)
+
     @dp.message(Command("my"))
     async def cmd_my(message: Message) -> None:
         if not message.from_user:
@@ -956,11 +994,7 @@ def build_dispatcher(
             if not emp:
                 await message.answer("Нет доступа.")
                 return
-            people = (
-                await session.scalars(select(Employee).where(Employee.active.is_(True)))
-            ).all()
-            text = await format_open_tasks(session, people=list(people))
-        await message.answer(text)
+            await _send_team_overview(message=message, viewer=emp, session=session)
 
     @dp.message(Command("name"))
     async def cmd_name(message: Message, command: CommandObject) -> None:
@@ -1415,6 +1449,41 @@ def build_dispatcher(
                     )
                 except Exception:  # noqa: BLE001
                     pass
+
+    @dp.callback_query(F.data.startswith("plist:"))
+    async def on_person_list(callback: CallbackQuery) -> None:
+        """Открыть задачи выбранного сотрудника (с кнопками напомнить)."""
+        if not callback.data or not callback.from_user:
+            return
+        try:
+            emp_id = int(callback.data.split(":")[1])
+        except (ValueError, IndexError):
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        uid = int(callback.from_user.id)
+        async with session_factory() as session:
+            actor = await find_employee(session, uid)
+            if not actor:
+                await callback.answer("Нет доступа", show_alert=True)
+                return
+            is_owner = uid == int(settings.owner_telegram_id)
+            if not is_owner and not can_reassign_tasks(
+                role=actor.role, job_title=actor.job_title
+            ):
+                await callback.answer("Только владелец / рук", show_alert=True)
+                return
+            person = await session.get(Employee, emp_id)
+            if not person or not person.active:
+                await callback.answer("Сотрудник не найден", show_alert=True)
+                return
+            await callback.answer()
+            await _send_my_tasks(
+                edit_message=callback.message,
+                message=callback.message,
+                assignee=person,
+                session=session,
+                viewer=actor,
+            )
 
     @dp.callback_query(F.data.startswith("nudge:"))
     async def on_nudge(callback: CallbackQuery) -> None:
@@ -2109,8 +2178,12 @@ def build_dispatcher(
                         who = "me"
                     who_l = who.lower()
                     if who_l in {"all", "team", "все", "команда", "всех", "у всех", "статус"}:
-                        report = await format_open_tasks(session, people=list(people))
-                        await wait.edit_text(report)
+                        await _send_team_overview(
+                            message=message,
+                            edit_message=wait,
+                            viewer=author,
+                            session=session,
+                        )
                         return
                     if who_l in {"me", "себе", "мне", "я", "мои"}:
                         await _send_my_tasks(
