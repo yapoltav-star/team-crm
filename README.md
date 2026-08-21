@@ -65,7 +65,8 @@ Variables:
 - `STOCK_OWN_MAX_STOCK=0`
 - `STOCK_MIN_ORDERS=5` / `STOCK_REQUIRE_BUYOUTS=true`
 - `STOCK_MAX_TASKS=10`
-- `STOCK_ASSIGNEE_TELEGRAM_ID` — кому (0 = владелец)
+- `STOCK_ASSIGNEE_NAME=Вячеслав` — кому ставить (поиск по имени в CRM)
+- `STOCK_ASSIGNEE_TELEGRAM_ID` — если задан, важнее имени (0 = не использовать)
 
 Ручной запуск: `POST /api/stock-watch/run` (с `x-crm-password` если задан).
 

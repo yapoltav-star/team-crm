@@ -46,8 +46,9 @@ class Settings(BaseSettings):
     # требовать хотя бы 1 выкуп
     stock_require_buyouts: bool = Field(default=True, alias="STOCK_REQUIRE_BUYOUTS")
     stock_max_tasks: int = Field(default=10, alias="STOCK_MAX_TASKS")
-    # кому ставить задачи; 0 = владельцу
+    # кому ставить задачи; telegram id важнее имени; 0 + пустое имя = владельцу
     stock_assignee_telegram_id: int = Field(default=0, alias="STOCK_ASSIGNEE_TELEGRAM_ID")
+    stock_assignee_name: str = Field(default="Вячеслав", alias="STOCK_ASSIGNEE_NAME")
 
     # Полки у моих карточек: доля своих в топ-15 < порога → задача
     shelf_watch_enabled: bool = Field(default=True, alias="SHELF_WATCH_ENABLED")
@@ -72,6 +73,7 @@ class Settings(BaseSettings):
         "stock_watch_time",
         "shelf_watch_days",
         "shelf_watch_time",
+        "stock_assignee_name",
         "digest_morning_time",
         "digest_midday_time",
         "digest_evening_time",

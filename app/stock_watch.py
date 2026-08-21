@@ -215,6 +215,33 @@ async def run_stock_watch(
             )
             if emp:
                 assignee = emp
+            else:
+                logger.warning(
+                    "stock assignee telegram_id=%s not found — fallback to name/owner",
+                    settings.stock_assignee_telegram_id,
+                )
+        if assignee is owner and (settings.stock_assignee_name or "").strip():
+            needle = (settings.stock_assignee_name or "").strip()
+            emp = await session.scalar(
+                select(Employee).where(
+                    Employee.active.is_(True),
+                    Employee.role != "owner",
+                    Employee.name.ilike(f"%{needle}%"),
+                )
+            )
+            if emp:
+                assignee = emp
+            else:
+                logger.warning(
+                    "stock assignee name=%r not found — tasks go to owner",
+                    needle,
+                )
+        logger.info(
+            "stock_watch assignee → %s (id=%s, tg=%s)",
+            assignee.name,
+            assignee.id,
+            assignee.telegram_id,
+        )
 
         existing = await _blocked_markers(
             session, cooldown_days=settings.stock_cooldown_days
