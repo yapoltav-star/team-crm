@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-16" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-17" />
 </head>
 <body>
   <header class="top">
@@ -330,8 +330,12 @@
         <p class="tpl-schedule-hint">По командам и ролям. Можно выбрать всю команду или роль целиком.</p>
         <div id="tplAssigneeChecks" class="check-list check-list-grouped"></div>
       </fieldset>
-      <label class="check-row">
-        <input type="checkbox" name="active" checked /> Активен
+      <label class="switch-row" style="padding-left:0;padding-right:0">
+        <span class="switch-meta">
+          <span class="switch-text"><strong>Активен</strong></span>
+        </span>
+        <input class="switch-input" type="checkbox" name="active" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
       </label>
       <menu>
         <button type="button" id="tplDelete" class="danger ghost">Удалить</button>
@@ -341,6 +345,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-16"></script>
+  <script src="/static/app.js?v=pw-17"></script>
 </body>
 </html>

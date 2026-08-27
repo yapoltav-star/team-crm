@@ -1272,11 +1272,11 @@ body.dlg-open {
 
 .check-list {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.2rem;
 }
 
 .check-list-grouped {
-  max-height: 280px;
+  max-height: 320px;
   overflow: auto;
   gap: 0.65rem;
   padding-right: 0.15rem;
@@ -1284,8 +1284,8 @@ body.dlg-open {
 
 .check-team {
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 0.45rem 0.55rem 0.55rem;
+  border-radius: 12px;
+  padding: 0.4rem 0.5rem 0.45rem;
   background: var(--bg-soft, transparent);
 }
 
@@ -1294,7 +1294,8 @@ body.dlg-open {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.15rem;
+  padding: 0.15rem 0.2rem;
 }
 
 .check-team-head strong {
@@ -1304,11 +1305,22 @@ body.dlg-open {
 .check-team-head button,
 .check-role-head button {
   font-size: 0.72rem;
-  padding: 0.15rem 0.45rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card, transparent);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.check-team-head button:hover,
+.check-role-head button:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
 }
 
 .check-role {
-  margin: 0.35rem 0 0.15rem 0.15rem;
+  margin: 0.2rem 0 0.1rem;
 }
 
 .check-role-head {
@@ -1316,11 +1328,12 @@ body.dlg-open {
   align-items: center;
   justify-content: space-between;
   gap: 0.4rem;
-  margin-bottom: 0.2rem;
+  margin: 0.25rem 0.2rem 0.1rem;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 700;
   text-transform: lowercase;
+  letter-spacing: 0.02em;
 }
 
 .check-row {
@@ -1330,6 +1343,126 @@ body.dlg-open {
   color: var(--text);
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+/* iOS-style toggle rows for assignees */
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.5rem 0.35rem;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.switch-row:hover {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.switch-row:active {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.switch-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.switch-text strong {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.switch-text small {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+.switch-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.switch-ui {
+  position: relative;
+  flex-shrink: 0;
+  width: 50px;
+  height: 30px;
+  border-radius: 999px;
+  background: #76768033;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 70%, transparent);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+[data-theme="dark"] .switch-ui {
+  background: #39393d;
+  border-color: #4a4a4e;
+}
+
+.switch-ui::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12);
+  transition: transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.switch-input:checked + .switch-ui {
+  background: #34c759;
+  border-color: #34c759;
+}
+
+.switch-input:focus-visible + .switch-ui {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switch-input:checked + .switch-ui::after {
+  transform: translateX(20px);
+}
+
+.switch-input:disabled + .switch-ui {
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-ui,
+  .switch-ui::after {
+    transition: none;
+  }
 }
 
 .tpl-schedule {

@@ -1270,20 +1270,35 @@ function groupEmployeesByTeamRole(list) {
   });
 }
 
+function switchRowHtml(e, { checked = false, showRole = false } = {}) {
+  const role = showRole ? employeeRoleName(e) : "";
+  const sub =
+    showRole && role && role !== "без роли"
+      ? `<small>${escapeHtml(role)}</small>`
+      : "";
+  return `
+    <label class="switch-row">
+      <span class="switch-meta">
+        <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
+        <span class="switch-text">
+          <strong>${escapeHtml(e.name)}</strong>
+          ${sub}
+        </span>
+      </span>
+      <input class="switch-input" type="checkbox" value="${e.id}" ${
+        checked ? "checked" : ""
+      } />
+      <span class="switch-ui" aria-hidden="true"></span>
+    </label>`;
+}
+
 function fillAssigneeChecks(containerId, selectedIds, { grouped = false } = {}) {
   const box = $(containerId);
   const selected = new Set((selectedIds || []).map(Number));
   const list = (isOwner() ? people() : visiblePeople()).slice();
   if (!grouped) {
     box.innerHTML = list
-      .map(
-        (e) => `
-      <label class="check-row">
-        <input type="checkbox" value="${e.id}" ${selected.has(e.id) ? "checked" : ""} />
-        <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
-        ${escapeHtml(e.name)}
-      </label>`
-      )
+      .map((e) => switchRowHtml(e, { checked: selected.has(e.id), showRole: true }))
       .join("");
     return;
   }
@@ -1300,14 +1315,7 @@ function fillAssigneeChecks(containerId, selectedIds, { grouped = false } = {}) 
         .map((r) => {
           const roleIds = r.people.map((p) => p.id);
           const peopleHtml = r.people
-            .map(
-              (e) => `
-            <label class="check-row">
-              <input type="checkbox" value="${e.id}" ${selected.has(e.id) ? "checked" : ""} />
-              <span class="avatar mini">${escapeHtml(initials(e.name))}</span>
-              ${escapeHtml(e.name)}
-            </label>`
-            )
+            .map((e) => switchRowHtml(e, { checked: selected.has(e.id) }))
             .join("");
           return `
           <div class="check-role">
