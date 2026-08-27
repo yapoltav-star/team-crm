@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-17" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-18" />
 </head>
 <body>
   <header class="top">
@@ -287,6 +287,18 @@
     </form>
   </dialog>
 
+  <!-- PICK THEME ON DROP -->
+  <dialog id="pickThemeDlg">
+    <form id="pickThemeForm" method="dialog">
+      <h3 id="pickThemeTitle">Тема задачи</h3>
+      <p class="tpl-schedule-hint" id="pickThemeHint">Выбери тему для колонки «В работе» / «Выполнено».</p>
+      <div id="pickThemeList" class="pick-theme-list"></div>
+      <menu>
+        <button type="button" id="pickThemeCancel" class="ghost" value="cancel">Отмена</button>
+      </menu>
+    </form>
+  </dialog>
+
   <!-- TEMPLATE DIALOG -->
   <dialog id="tplDlg">
     <form id="tplForm">
@@ -345,6 +357,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-17"></script>
+  <script src="/static/app.js?v=pw-18"></script>
 </body>
 </html>

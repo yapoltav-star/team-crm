@@ -342,7 +342,7 @@ async def health() -> dict:
     settings = get_settings()
     return {
         "ok": True,
-        "build": "ios-assignee-switch-2026-08-27",
+        "build": "pick-theme-on-drop-2026-08-27",
         "db": settings.db_backend,
         "persistent": settings.db_backend == "postgres",
         "auth": bool(str(settings.web_password or "").strip()),

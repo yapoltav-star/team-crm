@@ -806,6 +806,93 @@ function appendCard(host, t) {
   host.appendChild(card);
 }
 
+function pickThemeForMove({
+  taskTitle = "",
+  status = "doing",
+  preferredThemeId = null,
+} = {}) {
+  const dlg = $("#pickThemeDlg");
+  const list = $("#pickThemeList");
+  const titleEl = $("#pickThemeTitle");
+  const hintEl = $("#pickThemeHint");
+  if (!dlg || !list) {
+    return Promise.resolve({ cancelled: true });
+  }
+  const statusLabel = status === "done" ? "Выполнено" : "В работе";
+  if (titleEl) titleEl.textContent = "Выбери тему";
+  if (hintEl) {
+    hintEl.textContent = taskTitle
+      ? `«${taskTitle}» → ${statusLabel}`
+      : `Задача переходит в «${statusLabel}»`;
+  }
+
+  const themes = boardThemes();
+  const preferred =
+    preferredThemeId != null && preferredThemeId !== ""
+      ? Number(preferredThemeId)
+      : null;
+
+  const rows = [
+    {
+      id: null,
+      title: "Без темы",
+      note: "",
+      selected: preferred == null || Number.isNaN(preferred),
+    },
+    ...themes.map((th) => ({
+      id: th.id,
+      title: th.title,
+      note: th.is_system ? "системная" : "",
+      selected: preferred != null && Number(th.id) === preferred,
+    })),
+  ];
+
+  list.innerHTML = rows
+    .map(
+      (r) => `
+    <button type="button" class="pick-theme-btn${r.selected ? " selected" : ""}" data-theme-id="${
+      r.id == null ? "" : r.id
+    }">
+      <span>${escapeHtml(r.title)}</span>
+      ${r.note ? `<small>${escapeHtml(r.note)}</small>` : ""}
+    </button>`
+    )
+    .join("");
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      dlg.removeEventListener("close", onClose);
+      cancelBtn?.removeEventListener("click", onCancel);
+      list.querySelectorAll(".pick-theme-btn").forEach((btn) => {
+        btn.removeEventListener("click", onPick);
+      });
+      if (dlg.open) dlg.close();
+      resolve(result);
+    };
+    const onClose = () => finish({ cancelled: true });
+    const onCancel = (e) => {
+      e.preventDefault();
+      finish({ cancelled: true });
+    };
+    const onPick = (e) => {
+      const btn = e.currentTarget;
+      const raw = btn.getAttribute("data-theme-id");
+      const themeId = raw === "" || raw == null ? null : Number(raw);
+      finish({ cancelled: false, themeId });
+    };
+    const cancelBtn = $("#pickThemeCancel");
+    cancelBtn?.addEventListener("click", onCancel);
+    list.querySelectorAll(".pick-theme-btn").forEach((btn) => {
+      btn.addEventListener("click", onPick);
+    });
+    dlg.addEventListener("close", onClose);
+    dlg.showModal();
+  });
+}
+
 function bindDropZone(el, { status, themeId, keepTheme = false }) {
   el.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -820,17 +907,26 @@ function bindDropZone(el, { status, themeId, keepTheme = false }) {
     if (!id) return;
     const prev = state.board?.tasks?.find((t) => Number(t.id) === id);
     const body = { status, actor_id: state.meId || null };
+
     if (status === "todo") {
       body.theme_id = null;
-    } else if (status === "done") {
-      // в «Выполнено» всегда та же тема, что была (из «В работе» / откуда угодно)
-      if (prev && prev.theme_id != null) body.theme_id = prev.theme_id;
-      else if (themeId !== undefined) body.theme_id = themeId;
+    } else if (status === "doing" || status === "done") {
+      let preferred = null;
+      if (themeId != null && themeId !== "") preferred = themeId;
+      else if (prev && prev.theme_id != null) preferred = prev.theme_id;
+      const pick = await pickThemeForMove({
+        taskTitle: prev?.title || "",
+        status,
+        preferredThemeId: preferred,
+      });
+      if (pick.cancelled) return;
+      body.theme_id = pick.themeId;
     } else if (keepTheme) {
       if (prev && prev.theme_id != null) body.theme_id = prev.theme_id;
     } else if (themeId !== undefined) {
       body.theme_id = themeId;
     }
+
     try {
       await api(`/api/tasks/${id}`, {
         method: "PATCH",
