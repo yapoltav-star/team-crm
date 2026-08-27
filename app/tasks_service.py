@@ -13,6 +13,144 @@ STATUS_LABEL = {"todo": "Новая", "doing": "В работе", "done": "Вы�
 
 _DEFAULT_DUE_DAYS = 3
 
+_MONTHS_RU: dict[str, int] = {
+    "января": 1,
+    "январь": 1,
+    "янв": 1,
+    "февраля": 2,
+    "февраль": 2,
+    "фев": 2,
+    "марта": 3,
+    "март": 3,
+    "мар": 3,
+    "апреля": 4,
+    "апрель": 4,
+    "апр": 4,
+    "мая": 5,
+    "май": 5,
+    "июня": 6,
+    "июнь": 6,
+    "июн": 6,
+    "июля": 7,
+    "июль": 7,
+    "июл": 7,
+    "августа": 8,
+    "август": 8,
+    "авг": 8,
+    "сентября": 9,
+    "сентябрь": 9,
+    "сент": 9,
+    "сен": 9,
+    "октября": 10,
+    "октябрь": 10,
+    "окт": 10,
+    "ноября": 11,
+    "ноябрь": 11,
+    "ноя": 11,
+    "декабря": 12,
+    "декабрь": 12,
+    "дек": 12,
+}
+
+# «на 10 сентября», «к 10 сент 2026», «срок 10 сентября»
+_DATE_MONTH_RE = re.compile(
+    r"(?i)(?:(?:на|к|до|срок[уа]?|deadline)\s+)?"
+    r"(?<!\d)(\d{1,2})\s+"
+    r"(января|январь|янв|"
+    r"февраля|февраль|фев|"
+    r"марта|март|мар|"
+    r"апреля|апрель|апр|"
+    r"мая|май|"
+    r"июня|июнь|июн|"
+    r"июля|июль|июл|"
+    r"августа|август|авг|"
+    r"сентября|сентябрь|сент|сен|"
+    r"октября|октябрь|окт|"
+    r"ноября|ноябрь|ноя|"
+    r"декабря|декабрь|дек)"
+    r"(?:\s+(\d{4}))?"
+    r"(?!\w)"
+)
+
+# 10.09 / 10.09.2026 / 10/09/26
+_DATE_DOT_RE = re.compile(
+    r"(?<!\d)(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?(?!\d)"
+)
+
+_ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def _safe_date(year: int, month: int, day: int) -> date | None:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _year_for_md(today: date, month: int, day: int, year: int | None) -> int:
+    if year is not None:
+        return year
+    candidate = _safe_date(today.year, month, day)
+    if candidate is None:
+        return today.year
+    # если дата уже прошла — следующий год
+    if candidate < today:
+        return today.year + 1
+    return today.year
+
+
+def parse_calendar_due(blob: str, today: date) -> date | None:
+    """Вытащить календарную дату из текста: «на 10 сентября», «10.09.2026»."""
+    text = (blob or "").strip().lower().replace("ё", "е")
+    if not text:
+        return None
+
+    m = _DATE_MONTH_RE.search(text)
+    if m:
+        day = int(m.group(1))
+        month = _MONTHS_RU.get(m.group(2).lower().replace("ё", "е"))
+        year_raw = m.group(3)
+        year = int(year_raw) if year_raw else None
+        if month and 1 <= day <= 31:
+            y = _year_for_md(today, month, day, year)
+            parsed = _safe_date(y, month, day)
+            if parsed:
+                return parsed
+
+    m = _DATE_DOT_RE.search(text)
+    if m:
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year_raw = m.group(3)
+        year: int | None
+        if year_raw:
+            y = int(year_raw)
+            if y < 100:
+                y += 2000
+            year = y
+        else:
+            year = None
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            y = _year_for_md(today, month, day, year)
+            parsed = _safe_date(y, month, day)
+            if parsed:
+                return parsed
+    return None
+
+
+def strip_due_phrase(text: str) -> str:
+    """Убрать из названия фразу со сроком («на 10 сентября, …»)."""
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+    cleaned = _DATE_MONTH_RE.sub(" ", raw)
+    cleaned = _DATE_DOT_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"(?i)\b(сегодня|завтра|послезавтра|today|tomorrow)\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bсрок[уа]?\b", " ", cleaned)
+    cleaned = re.sub(r"\s*[,;:\-–—]+\s*", " ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,;:-–—")
+    return cleaned or raw
+
 
 def resolve_due_date(
     today: date,
@@ -21,11 +159,16 @@ def resolve_due_date(
     explicit: date | None = None,
     hint: str | None = None,
 ) -> date:
-    """Срок: явный → сегодня/завтра из текста/hint → иначе +3 дня."""
+    """Срок: явный → ISO/сегодня/завтра/календарь из текста → иначе +3 дня."""
     if explicit is not None:
         return explicit
-    h = (hint or "").strip().lower()
-    blob = f"{h} {text}".lower()
+    h = (hint or "").strip().lower().replace("ё", "е")
+    iso = _ISO_RE.match(h)
+    if iso:
+        parsed = _safe_date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+        if parsed:
+            return parsed
+    blob = f"{h} {text}".lower().replace("ё", "е")
     if h in {"today", "сегодня"} or re.search(
         r"(?i)(?<![а-яa-z])(сегодня|на\s+сегодня|today)(?![а-яa-z])", blob
     ):
@@ -38,6 +181,9 @@ def resolve_due_date(
         r"(?i)(?<![а-яa-z])послезавтра(?![а-яa-z])", blob
     ):
         return today + timedelta(days=2)
+    cal = parse_calendar_due(blob, today)
+    if cal is not None:
+        return cal
     return today + timedelta(days=_DEFAULT_DUE_DAYS)
 
 

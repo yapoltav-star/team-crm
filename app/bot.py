@@ -238,12 +238,23 @@ async def create_and_notify(
         articles = arts
     title = title2
 
-    from app.tasks_service import add_event, set_assignees
+    from app.tasks_service import add_event, resolve_due_date, set_assignees, strip_due_phrase
 
     today = datetime.now(settings.tz).date()
     due = None
     if kind == "once":
         due = resolve_due_date(today, text=title, explicit=due_date, hint=due_hint)
+        # если в тексте был срок («на 10 сентября») — убрать из названия
+        from app.tasks_service import parse_calendar_due
+
+        if parse_calendar_due(title, today) is not None or (
+            due_hint
+            and due_hint.strip().lower()
+            not in {"", "default", "today", "tomorrow", "day_after", "сегодня", "завтра", "послезавтра"}
+        ):
+            cleaned = strip_due_phrase(title)
+            if cleaned and cleaned != title:
+                title = cleaned
     primary = targets[0]
     task = Task(
         title=title,
