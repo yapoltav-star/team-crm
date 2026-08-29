@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+from datetime import date
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -50,7 +51,7 @@ TOOLS = [
                         "description": (
                             "Срок задачи. "
                             "today — сегодня; tomorrow — завтра; "
-                            "YYYY-MM-DD — конкретная дата («на 10 сентября» → 2026-09-10); "
+                            "YYYY-MM-DD — конкретная дата («на 10 сентября» → дату года); "
                             "default — только если срок НЕ назвали (тогда +3 дня)"
                         ),
                     },
@@ -186,16 +187,43 @@ def _client(settings: Settings) -> AsyncOpenAI:
     return AsyncOpenAI(**kwargs)
 
 
-async def parse_intent(
-    settings: Settings,
+def _model_name(settings: Settings) -> str:
+    return (settings.openai_model or "gpt-5.6-terra").strip()
+
+
+def _uses_responses_api(model: str) -> bool:
+    """gpt-5.4+ + tools → Responses API; иначе chat.completions."""
+    m = (model or "").lower().strip()
+    if m.startswith(("gpt-5.6", "gpt-5.5", "gpt-5.4")):
+        return True
+    if m in {"gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}:
+        return True
+    return False
+
+
+def _responses_tools() -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for t in TOOLS:
+        fn = t["function"]
+        out.append(
+            {
+                "type": "function",
+                "name": fn["name"],
+                "description": fn["description"],
+                "parameters": fn["parameters"],
+            }
+        )
+    return out
+
+
+def _build_system(
     *,
-    text: str,
     author_name: str,
     people: list[dict[str, str]],
-    is_owner: bool = False,
-    job_title: str = "",
-    team_group: str = "",
-) -> dict[str, Any]:
+    is_owner: bool,
+    job_title: str,
+    team_group: str,
+) -> str:
     names = (
         ", ".join(
             f"{p['name']} (доступ:{p.get('role')}, роль:{p.get('job_title') or '—'}, "
@@ -216,8 +244,10 @@ async def parse_intent(
         )
     else:
         role = "сотрудник (свои задачи; чужие — только если есть доступ)"
-    system = (
+    today = date.today()
+    return (
         "Ты ассистент task-CRM в Telegram. Пользователь пишет текстом или голосом.\n"
+        f"Сегодня: {today.isoformat()} (год {today.year}).\n"
         f"Автор: {author_name} — {role}. Сотрудники в зоне видимости: {names}.\n"
         "Создать задачу → create_task.\n"
         "«поставь задачу Софии … согласовать с Дилей» → assignee=ТОЛЬКО София. "
@@ -232,7 +262,7 @@ async def parse_intent(
         "Голое упоминание проекта в тексте бренда — не аудитория.\n"
         "Если сказал «сегодня»/«завтра» — due=today|tomorrow. "
         "Если назвал дату («на 10 сентября», «до 5.10», «к 12 ноября») — "
-        "due=YYYY-MM-DD (год текущий, если дата уже прошла — следующий). "
+        f"due=YYYY-MM-DD (год {today.year}, если дата уже прошла — следующий). "
         "Иначе due=default.\n"
         "Если сказал «добавь комментарий …» — вынеси текст в comment, а из title убери эту часть.\n"
         "В title можно писать короткий артикул: «042 голд», «041 серый» — "
@@ -246,19 +276,97 @@ async def parse_intent(
         "ВАЖНО: закрой ≠ удали. Если сказали закрой/заверши — только complete_task.\n"
         "query = id или часть названия.\n"
         "Не выдумывай задачи — только вызывай tool, данные подтянет система.\n"
+        "Если намерение неочевидно — короткий уточняющий вопрос, без tool.\n"
         "Иначе короткий ответ."
     )
-    client = _client(settings)
-    response = await client.chat.completions.create(
-        model=settings.openai_model or "gpt-4.1-mini",
-        messages=[
+
+
+def _finalize_action(text: str, action: str, args: dict[str, Any]) -> dict[str, Any]:
+    low = (text or "").lower().replace("ё", "е")
+    close_words = (
+        "закрой",
+        "закройте",
+        "заверши",
+        "завершите",
+        "закрыть",
+        "завершить",
+        "отметь сделан",
+        "отметь выполн",
+        "сделай выполнен",
+    )
+    delete_words = ("удали", "удалите", "убери", "уберите", "снеси", "сноси")
+    wants_close = any(w in low for w in close_words)
+    wants_delete = any(w in low for w in delete_words)
+    # страховка: «закрой» никогда не должно стать удалением
+    if action == "delete_task" and wants_close and not wants_delete:
+        action = "complete_task"
+    return {"action": action, **args}
+
+
+async def _parse_via_responses(
+    client: AsyncOpenAI,
+    *,
+    model: str,
+    system: str,
+    text: str,
+    reasoning_effort: str,
+) -> dict[str, Any]:
+    effort = (reasoning_effort or "low").strip().lower() or "low"
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "instructions": system,
+        "input": [{"role": "user", "content": text}],
+        "tools": _responses_tools(),
+        "tool_choice": "auto",
+        "reasoning": {"effort": effort},
+    }
+    response = await client.responses.create(**kwargs)
+    for item in response.output or []:
+        if getattr(item, "type", None) != "function_call":
+            continue
+        try:
+            args = json.loads(getattr(item, "arguments", None) or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        if not isinstance(args, dict):
+            args = {}
+        return _finalize_action(text, str(item.name), args)
+    reply = (getattr(response, "output_text", None) or "").strip()
+    if not reply:
+        for item in response.output or []:
+            if getattr(item, "type", None) != "message":
+                continue
+            for part in getattr(item, "content", None) or []:
+                if getattr(part, "type", None) in {"output_text", "text"}:
+                    reply = (getattr(part, "text", None) or "").strip()
+                    if reply:
+                        break
+            if reply:
+                break
+    return {"action": "chat", "reply": reply or "Не понял."}
+
+
+async def _parse_via_chat(
+    client: AsyncOpenAI,
+    *,
+    model: str,
+    system: str,
+    text: str,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": text},
         ],
-        tools=TOOLS,
-        tool_choice="auto",
-        temperature=0.1,
-    )
+        "tools": TOOLS,
+        "tool_choice": "auto",
+    }
+    # reasoning-модели (gpt-5*) не принимают temperature ≠ default
+    m = model.lower()
+    if not m.startswith(("gpt-5", "o1", "o3", "o4")):
+        kwargs["temperature"] = 0.1
+    response = await client.chat.completions.create(**kwargs)
     msg = response.choices[0].message
     if msg.tool_calls:
         call = msg.tool_calls[0]
@@ -266,35 +374,53 @@ async def parse_intent(
             args = json.loads(call.function.arguments or "{}")
         except json.JSONDecodeError:
             args = {}
-        action = call.function.name
-        low = (text or "").lower().replace("ё", "е")
-        close_words = (
-            "закрой",
-            "закройте",
-            "заверши",
-            "завершите",
-            "закрыть",
-            "завершить",
-            "отметь сделан",
-            "отметь выполн",
-            "сделай выполнен",
-        )
-        delete_words = ("удали", "удалите", "убери", "уберите", "снеси", "сноси")
-        wants_close = any(w in low for w in close_words)
-        wants_delete = any(w in low for w in delete_words)
-        # страховка: «закрой» никогда не должно стать удалением
-        if action == "delete_task" and wants_close and not wants_delete:
-            action = "complete_task"
-        return {"action": action, **args}
+        if not isinstance(args, dict):
+            args = {}
+        return _finalize_action(text, call.function.name, args)
     return {"action": "chat", "reply": (msg.content or "Не понял.").strip()}
+
+
+async def parse_intent(
+    settings: Settings,
+    *,
+    text: str,
+    author_name: str,
+    people: list[dict[str, str]],
+    is_owner: bool = False,
+    job_title: str = "",
+    team_group: str = "",
+) -> dict[str, Any]:
+    system = _build_system(
+        author_name=author_name,
+        people=people,
+        is_owner=is_owner,
+        job_title=job_title,
+        team_group=team_group,
+    )
+    client = _client(settings)
+    model = _model_name(settings)
+    try:
+        if _uses_responses_api(model):
+            return await _parse_via_responses(
+                client,
+                model=model,
+                system=system,
+                text=text,
+                reasoning_effort=str(settings.openai_reasoning_effort or "low"),
+            )
+        return await _parse_via_chat(client, model=model, system=system, text=text)
+    except Exception:
+        logger.exception("parse_intent failed model=%s", model)
+        raise
 
 
 async def transcribe_voice(settings: Settings, ogg_bytes: bytes) -> str:
     client = _client(settings)
     bio = io.BytesIO(ogg_bytes)
     bio.name = "voice.ogg"
+    model = (settings.openai_transcribe_model or "gpt-4o-mini-transcribe").strip()
     result = await client.audio.transcriptions.create(
-        model="whisper-1",
+        model=model,
         file=bio,
         language="ru",
     )

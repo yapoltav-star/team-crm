@@ -23,8 +23,15 @@ class Settings(BaseSettings):
     database_url: str = Field(default="", alias="DATABASE_URL")
     web_password: str = Field(default="", alias="WEB_PASSWORD")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
+    # gpt-5.6-terra: умнее mini, разумная цена; sol — максимум; luna — дешевле
+    openai_model: str = Field(default="gpt-5.6-terra", alias="OPENAI_MODEL")
+    # none|low|medium|high — для Responses API (gpt-5.4+); low хватает для intent
+    openai_reasoning_effort: str = Field(default="low", alias="OPENAI_REASONING_EFFORT")
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
+    # whisper-1 | gpt-4o-mini-transcribe | gpt-4o-transcribe
+    openai_transcribe_model: str = Field(
+        default="gpt-4o-mini-transcribe", alias="OPENAI_TRANSCRIBE_MODEL"
+    )
     # устаревший авто-вход без одобрения (по умолчанию выкл — заявка владельцу)
     allow_self_join: bool = Field(default=False, alias="ALLOW_SELF_JOIN")
 
@@ -68,6 +75,8 @@ class Settings(BaseSettings):
         "web_password",
         "openai_api_key",
         "openai_base_url",
+        "openai_reasoning_effort",
+        "openai_transcribe_model",
         "wb_dashboard_url",
         "stock_watch_days",
         "stock_watch_time",
