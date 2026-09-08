@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-18" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-19" />
 </head>
 <body>
   <header class="top">
@@ -33,6 +33,7 @@
     <nav class="nav-tabs" id="navTabs">
       <button type="button" data-view="home" class="active">Главная</button>
       <button type="button" data-view="board">Доска</button>
+      <button type="button" data-view="auto">Автозадачи</button>
       <button type="button" data-view="templates">Шаблоны</button>
       <button type="button" data-view="archive">Архив</button>
     </nav>
@@ -104,6 +105,30 @@
         <main id="board" class="board"></main>
         <p id="emptyHint" class="empty-hint hidden">Пока пусто — напиши задачу сверху.</p>
       </section>
+    </div>
+  </section>
+
+  <!-- AUTO TASKS -->
+  <section id="viewAuto" class="view hidden">
+    <div class="tpl-wrap auto-wrap">
+      <div class="tpl-head">
+        <div>
+          <h1>Автозадачи</h1>
+          <p>Задачи, которые бот создаёт сам: пустой склад и слабые полки. На обычной доске они тоже есть, но здесь удобнее следить за проверками.</p>
+        </div>
+        <button type="button" id="btnAutoRefresh" class="ghost">Обновить</button>
+      </div>
+      <div id="autoWatchCards" class="auto-watch-grid"></div>
+      <div class="auto-section-head">
+        <h2>Открытые</h2>
+        <span id="autoOpenCount" class="chip"></span>
+      </div>
+      <div id="autoOpenList" class="tpl-list"></div>
+      <div class="auto-section-head">
+        <h2>Недавно закрытые / архив</h2>
+        <span id="autoDoneCount" class="chip"></span>
+      </div>
+      <div id="autoDoneList" class="tpl-list"></div>
     </div>
   </section>
 
@@ -357,6 +382,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-18"></script>
+  <script src="/static/app.js?v=pw-19"></script>
 </body>
 </html>

@@ -287,6 +287,20 @@ def theme_pick_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def seen_ack_kb(task_id: int, employee_id: int) -> InlineKeyboardMarkup:
+    """Кнопка для владельца/постановщика: отметить, что увидел работу сотрудника."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👍 Увидел",
+                    callback_data=f"seen:{int(task_id)}:{int(employee_id)}",
+                )
+            ]
+        ]
+    )
+
+
 def confirm_task_kb(task_id: int) -> InlineKeyboardMarkup:
     """После создания: подтвердить отправку или удалить черновик."""
     return InlineKeyboardMarkup(
@@ -512,6 +526,7 @@ async def notify_task_comment(
         f"💬 Комментарий к задаче <b>{task.title}</b>\n"
         f"от <b>{author.name}</b>:\n{body.strip()}"
     )
+    kb = seen_ack_kb(task.id, author.id)
     recipients: list[Employee] = []
     seen: set[int] = set()
 
@@ -532,7 +547,12 @@ async def notify_task_comment(
 
     for emp in recipients:
         try:
-            await bot.send_message(int(emp.telegram_id), text, parse_mode="HTML")
+            await bot.send_message(
+                int(emp.telegram_id),
+                text,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
         except Exception:  # noqa: BLE001
             logger.exception(
                 "comment notify failed task=%s user=%s", task.id, emp.telegram_id

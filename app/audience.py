@@ -100,14 +100,38 @@ def find_project_in_text(text: str, people: list[Employee]) -> str | None:
 
 
 def find_role_in_text(text: str) -> str | None:
+    """Первая по тексту должность-адресат.
+
+    Важно: берём самое раннее вхождение, а не «длинную» форму где угодно.
+    Иначе «задача рук: почистить склад …» ловит «склад» из тела и уходит
+    не на рук, а на складского.
+    """
     blob = _norm(text)
+    best_pos: int | None = None
+    best_title: str | None = None
+    best_len = 0
+
+    def _consider(pos: int, matched_len: int, title: str) -> None:
+        nonlocal best_pos, best_title, best_len
+        if best_pos is None or pos < best_pos or (
+            pos == best_pos and matched_len > best_len
+        ):
+            best_pos = pos
+            best_title = title
+            best_len = matched_len
+
     for pat, title in ROLE_PHRASES:
-        if re.search(pat, blob, flags=re.IGNORECASE):
-            return title
+        m = re.search(pat, blob, flags=re.IGNORECASE)
+        if m:
+            _consider(m.start(), m.end() - m.start(), title)
     for form in sorted(ROLE_FORMS.keys(), key=len, reverse=True):
-        if re.search(rf"(?<![а-яa-z0-9]){re.escape(_norm(form))}(?![а-яa-z0-9])", blob):
-            return ROLE_FORMS[form]
-    return None
+        m = re.search(
+            rf"(?<![а-яa-z0-9]){re.escape(_norm(form))}(?![а-яa-z0-9])",
+            blob,
+        )
+        if m:
+            _consider(m.start(), m.end() - m.start(), ROLE_FORMS[form])
+    return best_title
 
 
 def _name_stem(name: str) -> str:

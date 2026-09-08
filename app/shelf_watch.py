@@ -98,6 +98,7 @@ async def scan_weak_shelves(
     dest: int,
     delay_sec: float,
     min_orders: int,
+    exclude_vendor_codes: set[str] | None = None,
 ) -> tuple[list[WeakShelf], dict[str, Any]]:
     """Тянет карточки с продажами и их полки; возвращает слабые + meta."""
     base = base_url.rstrip("/")
@@ -108,6 +109,7 @@ async def scan_weak_shelves(
         raise ValueError(str(own_payload.get("error")))
 
     articles = own_payload.get("articles") or []
+    exclude = {x.casefold() for x in (exclude_vendor_codes or set()) if x}
     own_nms = set()
     for a in articles:
         try:
@@ -118,6 +120,7 @@ async def scan_weak_shelves(
     weak: list[WeakShelf] = []
     errors = 0
     checked = 0
+    skipped_excluded = 0
     for a in articles:
         try:
             nm = int(a.get("nm_id"))
@@ -127,6 +130,9 @@ async def scan_weak_shelves(
         if ordered < max(0, min_orders):
             continue
         vc = str(a.get("vendor_code") or nm).strip()
+        if vc.casefold() in exclude:
+            skipped_excluded += 1
+            continue
         try:
             data = await fetch_json(
                 f"{base}/api/competitor-shelf?nm_id={nm}&dest={dest}&limit=15"
@@ -167,6 +173,7 @@ async def scan_weak_shelves(
         "articles_total": len(articles),
         "checked": checked,
         "errors": errors,
+        "skipped_excluded": skipped_excluded,
         "days": own_payload.get("days"),
         "threshold": min_mine_pct,
     }
@@ -191,6 +198,7 @@ async def run_shelf_watch(
             dest=settings.shelf_dest,
             delay_sec=settings.shelf_request_delay_sec,
             min_orders=settings.shelf_min_orders,
+            exclude_vendor_codes=settings.shelf_exclude_set,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("shelf scan failed")

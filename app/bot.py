@@ -47,6 +47,7 @@ from app.notify import (
     reassign_pick_kb,
     resolve_run,
     save_task_comment,
+    seen_ack_kb,
     task_action_kb,
     team_people_kb,
     theme_pick_kb,
@@ -1297,6 +1298,7 @@ def build_dispatcher(
         title = ""
         new_status = action
         uid = int(callback.from_user.id)
+        actor_emp_id: int | None = None
         themes_for_pick: list = []
         async with session_factory() as session:
             run = await resolve_run(session, run_id=run_id, task_id=task_id)
@@ -1318,6 +1320,7 @@ def build_dispatcher(
             from app.tasks_service import apply_status
 
             actor = await find_employee(session, uid)
+            actor_emp_id = actor.id if actor else None
             await apply_status(
                 session,
                 run.task,
@@ -1351,6 +1354,10 @@ def build_dispatcher(
             if run.task.created_by and run.task.created_by.telegram_id is not None:
                 notify_ids.add(int(run.task.created_by.telegram_id))
 
+        ack_kb = (
+            seen_ack_kb(task_id_final, actor_emp_id) if actor_emp_id else None
+        )
+
         if new_status == "doing":
             await callback.answer("В работе 🔵")
             if callback.message:
@@ -1372,7 +1379,9 @@ def build_dispatcher(
                     continue
                 try:
                     await callback.bot.send_message(
-                        tid, f"🔵 {name} взял(а) в работу: {title}"
+                        tid,
+                        f"🔵 {name} взял(а) в работу: {title}",
+                        reply_markup=ack_kb,
                     )
                 except Exception:  # noqa: BLE001
                     pass
@@ -1388,7 +1397,11 @@ def build_dispatcher(
             if tid == uid:
                 continue
             try:
-                await callback.bot.send_message(tid, f"✅ {name} сделал(а): {title}")
+                await callback.bot.send_message(
+                    tid,
+                    f"✅ {name} сделал(а): {title}",
+                    reply_markup=ack_kb,
+                )
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1463,15 +1476,93 @@ def build_dispatcher(
             notify_ids = {int(settings.owner_telegram_id)}
             if creator_tg is not None:
                 notify_ids.add(creator_tg)
+            ack_kb = seen_ack_kb(task_id, actor.id)
             for tid in notify_ids:
                 if tid == uid:
                     continue
                 try:
                     await callback.bot.send_message(
-                        tid, f"✅ {actor.name} сделал(а): {title}"
+                        tid,
+                        f"✅ {actor.name} сделал(а): {title}",
+                        reply_markup=ack_kb,
                     )
                 except Exception:  # noqa: BLE001
                     pass
+
+    @dp.callback_query(F.data.startswith("seen:"))
+    async def on_seen_ack(callback: CallbackQuery) -> None:
+        """Владелец/менеджер отметил, что увидел работу — сотруднику уходит сигнал."""
+        if not callback.data or not callback.from_user:
+            return
+        parts = callback.data.split(":")
+        try:
+            task_id = int(parts[1])
+            employee_id = int(parts[2])
+        except (ValueError, IndexError):
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        uid = int(callback.from_user.id)
+        if callback.message and "👍 отметил" in (
+            callback.message.text or callback.message.html_text or ""
+        ):
+            await callback.answer("Уже отмечено")
+            return
+
+        async with session_factory() as session:
+            viewer = await find_employee(session, uid)
+            if not viewer:
+                await callback.answer("Нет доступа", show_alert=True)
+                return
+            target = await session.get(Employee, employee_id)
+            if not target or not target.active:
+                await callback.answer("Сотрудник не найден", show_alert=True)
+                return
+            if target.id == viewer.id:
+                await callback.answer("Это ваша же работа", show_alert=True)
+                return
+            task = await session.get(Task, task_id)
+            title = task.title if task else "задача"
+            target_tg = int(target.telegram_id) if target.telegram_id else 0
+            viewer_name = viewer.name
+            target_name = target.name
+
+        if not target_tg:
+            await callback.answer("У сотрудника нет Telegram", show_alert=True)
+            return
+
+        try:
+            await callback.bot.send_message(
+                target_tg,
+                f"👀 <b>{viewer_name}</b> увидел(а) и отметил(а) вашу работу:\n"
+                f"<b>{title}</b>",
+                parse_mode="HTML",
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "seen ack notify failed task=%s emp=%s", task_id, employee_id
+            )
+            await callback.answer("Не удалось отправить", show_alert=True)
+            return
+
+        if callback.message:
+            base = (
+                callback.message.html_text
+                or callback.message.text
+                or callback.message.caption
+                or ""
+            )
+            try:
+                await callback.message.edit_text(
+                    f"{base}\n\n👍 отметил(а) <b>{viewer_name}</b>",
+                    parse_mode="HTML",
+                    reply_markup=None,
+                )
+            except Exception:  # noqa: BLE001
+                try:
+                    await callback.message.edit_reply_markup(reply_markup=None)
+                except Exception:  # noqa: BLE001
+                    pass
+        await callback.answer(f"Отметили для {target_name}")
 
     @dp.callback_query(F.data.startswith("plist:"))
     async def on_person_list(callback: CallbackQuery) -> None:

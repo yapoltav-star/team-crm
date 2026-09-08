@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -89,6 +90,17 @@ def _norm_job_title(value: str | None) -> str:
 
 
 # _visible_subject_ids импортирован из app.visibility
+
+AUTO_MARKER_RE = re.compile(
+    r"\[auto:(own-stock|my-shelf):([^\]]*)\]",
+    re.IGNORECASE,
+)
+
+
+def _auto_kind(task: Task) -> str | None:
+    blob = f"{task.description or ''}\n{task.articles or ''}\n{task.title or ''}"
+    m = AUTO_MARKER_RE.search(blob)
+    return m.group(1).lower() if m else None
 
 
 def _task_matches_subjects(task: Task, subject_ids: set[int]) -> bool:
@@ -1027,6 +1039,80 @@ async def delete_template(
     return {"ok": True}
 
 
+@router.get("/auto-tasks")
+async def list_auto_tasks(
+    request: Request,
+    viewer_id: int | None = Query(None),
+    include_done: bool = Query(True),
+    include_archived: bool = Query(True),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Автозадачи склада/полок + статус последних проверок."""
+    settings = get_settings()
+    today = datetime.now(settings.tz).date()
+
+    viewer: Employee | None = None
+    if viewer_id is not None:
+        viewer = await session.get(Employee, viewer_id)
+        if not viewer or not viewer.active:
+            raise HTTPException(404, "Employee not found")
+
+    q = select(Task).options(*_task_options()).order_by(Task.created_at.desc(), Task.id.desc())
+    if not include_archived:
+        q = q.where(Task.archived_at.is_(None))
+    q = q.where(
+        Task.active.is_(True),
+        or_(
+            Task.description.ilike("%[auto:own-stock:%"),
+            Task.description.ilike("%[auto:my-shelf:%"),
+            Task.title.ilike("%Полка слабая:%"),
+            Task.title.ilike("%на вашем складе кончился%"),
+        ),
+    )
+    if not include_done:
+        q = q.where(Task.status != "done")
+
+    rows = (await session.scalars(q.limit(300))).all()
+    tasks = [t for t in rows if _auto_kind(t)]
+    if viewer is not None:
+        subject_ids = await _visible_subject_ids(session, viewer)
+        if subject_ids is not None:
+            tasks = [t for t in tasks if _task_visible_to(t, viewer, subject_ids)]
+
+    items = []
+    for t in tasks:
+        out = _task_out(t, today=today)
+        data = out.model_dump()
+        data["auto_kind"] = _auto_kind(t)
+        data["archived"] = t.archived_at is not None
+        items.append(data)
+
+    return {
+        "tasks": items,
+        "watches": {
+            "stock": {
+                "label": "Наш склад",
+                "kind": "own-stock",
+                "enabled": bool(settings.stock_watch_enabled),
+                "days": settings.stock_watch_days,
+                "time": settings.stock_watch_time,
+                "cooldown_days": settings.stock_cooldown_days,
+                "last": getattr(request.app.state, "last_stock_watch", None),
+            },
+            "shelf": {
+                "label": "Полки своих",
+                "kind": "my-shelf",
+                "enabled": bool(settings.shelf_watch_enabled),
+                "days": settings.shelf_watch_days,
+                "time": settings.shelf_watch_time,
+                "cooldown_days": settings.shelf_cooldown_days,
+                "min_mine_pct": settings.shelf_min_mine_pct,
+                "last": getattr(request.app.state, "last_shelf_watch", None),
+            },
+        },
+    }
+
+
 @router.post("/stock-watch/run")
 async def stock_watch_run(request: Request) -> dict:
     """Ручной запуск проверки остатков → автозадачи."""
@@ -1034,11 +1120,13 @@ async def stock_watch_run(request: Request) -> dict:
 
     settings = get_settings()
     bot = getattr(request.app.state, "bot", None)
-    return await run_stock_watch(
+    result = await run_stock_watch(
         session_factory=SessionLocal,
         settings=settings,
         bot=bot,
     )
+    request.app.state.last_stock_watch = result
+    return result
 
 
 @router.post("/shelf-watch/run")
@@ -1048,11 +1136,13 @@ async def shelf_watch_run(request: Request) -> dict:
 
     settings = get_settings()
     bot = getattr(request.app.state, "bot", None)
-    return await run_shelf_watch(
+    result = await run_shelf_watch(
         session_factory=SessionLocal,
         settings=settings,
         bot=bot,
     )
+    request.app.state.last_shelf_watch = result
+    return result
 
 
 @router.post("/digest/run")

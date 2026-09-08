@@ -1721,6 +1721,55 @@ body.dlg-open {
 
 .tpl-card h3 { margin: 0; font-size: 1.05rem; }
 .chip.ok { color: #86efac; }
+.chip.auto {
+  color: #fbbf24;
+  border-color: color-mix(in srgb, #fbbf24 45%, var(--line));
+}
+
+.auto-wrap .auto-watch-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-top: 1rem;
+}
+
+.auto-watch-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+}
+
+.auto-watch-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.auto-watch-card h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+}
+
+.auto-watch-last {
+  margin: 0.7rem 0 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.auto-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  margin-top: 1.4rem;
+}
+
+.auto-section-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
 
 #tplDlg { width: min(480px, 94vw); }
 #tplDlg form { display: grid; gap: 0.65rem; }

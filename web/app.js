@@ -247,6 +247,7 @@ function setView(view) {
   localStorage.setItem("crm_view", view);
   $("#viewHome").classList.toggle("hidden", view !== "home");
   $("#viewBoard").classList.toggle("hidden", view !== "board");
+  $("#viewAuto")?.classList.toggle("hidden", view !== "auto");
   $("#viewTemplates").classList.toggle("hidden", view !== "templates");
   $("#viewArchive").classList.toggle("hidden", view !== "archive");
   document.querySelectorAll("#navTabs button").forEach((b) => {
@@ -633,6 +634,22 @@ function cardDisplayDescription(raw) {
   return s;
 }
 
+function autoKindOf(task) {
+  const blob = `${task?.description || ""}\n${task?.articles || ""}\n${task?.title || ""}`;
+  if (task?.auto_kind) return String(task.auto_kind).toLowerCase();
+  const m = /\[auto:(own-stock|my-shelf):/i.exec(blob);
+  if (m) return m[1].toLowerCase();
+  if (/Полка слабая:/i.test(task?.title || "")) return "my-shelf";
+  if (/на вашем складе кончился/i.test(task?.title || "")) return "own-stock";
+  return "";
+}
+
+function autoKindLabel(kind) {
+  if (kind === "own-stock") return "склад";
+  if (kind === "my-shelf") return "полка";
+  return "авто";
+}
+
 function cardHtml(t) {
   const skus = parseArticles(t.articles);
   const skuHtml = skus.length
@@ -646,6 +663,7 @@ function cardHtml(t) {
       ? [{ id: t.assignee_id, name: t.assignee_name }]
       : [];
   const desc = cardDisplayDescription(t.description);
+  const autoKind = autoKindOf(t);
   const archiveBtn =
     t.status === "done" || t.status === "doing"
       ? `<button type="button" class="btn-archive" title="В архив">Архив</button>`
@@ -662,6 +680,7 @@ function cardHtml(t) {
     ${desc ? `<div class="desc">${escapeHtml(desc)}</div>` : ""}
     <div class="meta">
       ${avatarsHtml(assignees)}
+      ${autoKind ? `<span class="chip auto">${escapeHtml(autoKindLabel(autoKind))}</span>` : ""}
       ${t.theme_title ? `<span class="chip theme">${escapeHtml(t.theme_title)}</span>` : ""}
       <label class="chip due-chip" title="Нажми — сменить срок">
         <span>${t.due_date ? `до ${escapeHtml(formatDate(t.due_date))}` : "срок"}</span>
@@ -1239,6 +1258,7 @@ function render() {
   setView(state.view);
   if (state.view === "home") renderHome();
   if (state.view === "board") renderBoardView();
+  if (state.view === "auto") renderAutoTasks();
   if (state.view === "templates") renderTemplates();
   if (state.view === "archive") renderArchive();
 }
@@ -1258,6 +1278,131 @@ const MONTH_RU = [
   "Ноябрь",
   "Декабрь",
 ];
+
+function formatWatchLast(last) {
+  if (!last || typeof last !== "object") {
+    return "Ещё не запускалось после деплоя (или ждёт расписания).";
+  }
+  if (last.ok === false) {
+    const reason = last.error || last.skipped || "ошибка";
+    return `Не ок: ${reason}`;
+  }
+  const created = Array.isArray(last.created) ? last.created.length : Number(last.created || 0);
+  const bits = [`создано ${created}`];
+  if (last.weak_total != null) bits.push(`слабых полок ${last.weak_total}`);
+  if (last.critical_total != null) bits.push(`критичных ${last.critical_total}`);
+  if (last.skipped_cooldown != null) bits.push(`кулдаун ${last.skipped_cooldown}`);
+  if (last.skipped_excluded != null) bits.push(`исключено ${last.skipped_excluded}`);
+  if (last.checked != null) bits.push(`проверено ${last.checked}`);
+  return bits.join(" · ");
+}
+
+function renderAutoTaskCard(t) {
+  const kind = autoKindOf(t);
+  const names = (t.assignees?.length
+    ? t.assignees.map((a) => a.name)
+    : t.assignee_name
+      ? [t.assignee_name]
+      : []
+  ).join(", ");
+  const statusLabel =
+    t.archived || t.archived_at
+      ? "архив"
+      : t.status === "done"
+        ? "сделано"
+        : t.status === "doing"
+          ? "в работе"
+          : "новая";
+  const el = document.createElement("article");
+  el.className = "tpl-card";
+  el.innerHTML = `
+    <div class="tpl-card-top">
+      <h3>${escapeHtml(t.title)}</h3>
+      <span class="chip auto">${escapeHtml(autoKindLabel(kind))}</span>
+    </div>
+    <div class="meta">
+      <span class="chip ${t.status === "done" || t.archived ? "ok" : ""}">${statusLabel}</span>
+      ${names ? `<span class="chip assignee">${escapeHtml(names)}</span>` : ""}
+      ${t.due_date ? `<span class="chip">до ${escapeHtml(formatDate(t.due_date))}</span>` : ""}
+      ${t.created_at ? `<span class="chip">${escapeHtml(formatDt(t.created_at))}</span>` : ""}
+      ${t.articles ? `<span class="chip project">${escapeHtml(t.articles)}</span>` : ""}
+    </div>
+  `;
+  el.addEventListener("click", () => openTaskDialog(t.id));
+  return el;
+}
+
+async function renderAutoTasks() {
+  const watchBox = $("#autoWatchCards");
+  const openList = $("#autoOpenList");
+  const doneList = $("#autoDoneList");
+  if (!watchBox || !openList || !doneList) return;
+  watchBox.innerHTML = `<div class="home-empty">Загружаю…</div>`;
+  openList.innerHTML = "";
+  doneList.innerHTML = "";
+  let data;
+  try {
+    const q = state.meId ? `?viewer_id=${state.meId}` : "";
+    data = await api(`/api/auto-tasks${q}`);
+  } catch (err) {
+    watchBox.innerHTML = `<div class="home-empty">${escapeHtml(err.message || String(err))}</div>`;
+    return;
+  }
+  const watches = data.watches || {};
+  watchBox.innerHTML = "";
+  for (const key of ["stock", "shelf"]) {
+    const w = watches[key];
+    if (!w) continue;
+    const card = document.createElement("article");
+    card.className = "auto-watch-card";
+    const endpoint = key === "stock" ? "/api/stock-watch/run" : "/api/shelf-watch/run";
+    card.innerHTML = `
+      <div class="auto-watch-top">
+        <div>
+          <h3>${escapeHtml(w.label || key)}</h3>
+          <p class="desc">${w.enabled ? "вкл" : "выкл"} · ${escapeHtml(w.days || "—")} @ ${escapeHtml(w.time || "—")}${
+            w.min_mine_pct != null ? ` · порог &lt;${escapeHtml(String(w.min_mine_pct))}%` : ""
+          } · кулдаун ${escapeHtml(String(w.cooldown_days ?? "—"))}д</p>
+        </div>
+        <button type="button" class="ghost auto-run-btn" data-endpoint="${endpoint}">Запустить сейчас</button>
+      </div>
+      <p class="auto-watch-last">${escapeHtml(formatWatchLast(w.last))}</p>
+    `;
+    card.querySelector(".auto-run-btn")?.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      btn.textContent = "…";
+      try {
+        await api(endpoint, { method: "POST", body: "{}" });
+        await load();
+        await renderAutoTasks();
+      } catch (err) {
+        alert(err.message || String(err));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Запустить сейчас";
+      }
+    });
+    watchBox.appendChild(card);
+  }
+
+  const tasks = data.tasks || [];
+  const open = tasks.filter((t) => t.status !== "done" && !t.archived);
+  const done = tasks.filter((t) => t.status === "done" || t.archived);
+  $("#autoOpenCount").textContent = String(open.length);
+  $("#autoDoneCount").textContent = String(done.length);
+  if (!open.length) {
+    openList.innerHTML = `<div class="home-empty">Открытых автозадач нет.</div>`;
+  } else {
+    for (const t of open) openList.appendChild(renderAutoTaskCard(t));
+  }
+  if (!done.length) {
+    doneList.innerHTML = `<div class="home-empty">Пока пусто.</div>`;
+  } else {
+    for (const t of done.slice(0, 80)) doneList.appendChild(renderAutoTaskCard(t));
+  }
+}
 
 async function renderArchive() {
   const sel = $("#archiveMonth");
@@ -2044,6 +2189,10 @@ $("#empForm")?.addEventListener("submit", async (e) => {
 
 $("#archiveMonth")?.addEventListener("change", () => {
   if (state.view === "archive") renderArchive();
+});
+
+$("#btnAutoRefresh")?.addEventListener("click", () => {
+  if (state.view === "auto") renderAutoTasks();
 });
 
 $("#dlgDelete").addEventListener("click", async () => {

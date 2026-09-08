@@ -68,6 +68,23 @@ class Settings(BaseSettings):
     shelf_dest: int = Field(default=-1257786, alias="SHELF_DEST")  # Москва
     shelf_request_delay_sec: float = Field(default=0.6, alias="SHELF_REQUEST_DELAY_SEC")
     shelf_assignee_telegram_id: int = Field(default=0, alias="SHELF_ASSIGNEE_TELEGRAM_ID")
+    # артикулы, по которым не создавать «Полка слабая» (через запятую)
+    shelf_exclude_vendor_codes: str = Field(
+        default=(
+            "06_remeshok_leopard_45_0,"
+            "дляотправкиклиентовремешокпозапросу,"
+            "04_charger_block,"
+            "06_remeshok_white_45_0,"
+            "04_ch_переходник,"
+            "096_бланк_V11_дубль_0,"
+            "04ChargerLK,"
+            "04ChargerPodarok,"
+            "04ChargerPodarokOceanBlack,"
+            "04Зарядка Dt X Dt X Mini,"
+            "04Charger"
+        ),
+        alias="SHELF_EXCLUDE_VENDOR_CODES",
+    )
 
     @field_validator(
         "telegram_proxy",
@@ -82,6 +99,7 @@ class Settings(BaseSettings):
         "stock_watch_time",
         "shelf_watch_days",
         "shelf_watch_time",
+        "shelf_exclude_vendor_codes",
         "stock_assignee_name",
         "digest_morning_time",
         "digest_midday_time",
@@ -111,6 +129,14 @@ class Settings(BaseSettings):
             if v in {"1", "true", "yes", "on"}:
                 return True
         return value
+
+    @property
+    def shelf_exclude_set(self) -> set[str]:
+        return {
+            x.strip().casefold()
+            for x in (self.shelf_exclude_vendor_codes or "").split(",")
+            if x.strip()
+        }
 
     @property
     def tz(self) -> ZoneInfo:
