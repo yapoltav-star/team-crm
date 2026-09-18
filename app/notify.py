@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime
 
 from aiogram import Bot
@@ -313,6 +314,25 @@ def confirm_task_kb(task_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="🗑 Удалить",
                     callback_data=f"tc:no:{task_id}",
+                ),
+            ]
+        ]
+    )
+
+
+def confirm_bulk_kb(batch_key: str) -> InlineKeyboardMarkup:
+    """Подтвердить/отменить пачку черновиков из одного сообщения."""
+    key = re.sub(r"[^a-zA-Z0-9_-]", "", batch_key)[:24]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Отправить все",
+                    callback_data=f"tcb:ok:{key}",
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Отменить все",
+                    callback_data=f"tcb:no:{key}",
                 ),
             ]
         ]

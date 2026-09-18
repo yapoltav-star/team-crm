@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 import socket
 from datetime import date, datetime
 
@@ -37,6 +38,7 @@ from app.job_titles import can_nudge_tasks, can_reassign_tasks, can_view_all_emp
 from app.models import Employee, Task, TaskAssignee, TaskRun
 from app.notify import (
     ask_comment_kb,
+    confirm_bulk_kb,
     confirm_task_kb,
     ensure_run,
     my_tasks_done_kb,
@@ -364,6 +366,38 @@ async def _reply_task_for_confirm(
             pass
     await message.answer(text, reply_markup=kb)
 
+
+def format_bulk_confirm_text(
+    rows: list[tuple[Task, str | None]],
+    *,
+    max_chars: int = 3500,
+) -> str:
+    from html import escape
+
+    lines = [
+        f"Проверь <b>{len(rows)}</b> задач перед отправкой:",
+        "",
+    ]
+    used = sum(len(x) for x in lines)
+    shown = 0
+    for i, (task, warn) in enumerate(rows, 1):
+        who = _assignee_names(task)
+        title = task.title or ""
+        if len(title) > 140:
+            title = title[:137] + "…"
+        bit = f"{i}. <b>{escape(who)}</b> — {escape(title)}"
+        if warn:
+            bit += f"\n   ⚠️ {escape(warn)}"
+        if used + len(bit) + 80 > max_chars:
+            lines.append(f"…и ещё {len(rows) - shown}")
+            break
+        lines.append(bit)
+        used += len(bit) + 1
+        shown += 1
+    lines.append("")
+    lines.append("Подтвердить — отправим всем. Отменить — удалим черновики.")
+    return "\n".join(lines)
+
 async def _load_task_for_comment(session: AsyncSession, task_id: int) -> Task | None:
     return await session.scalar(
         select(Task)
@@ -655,6 +689,9 @@ def build_dispatcher(
         "/boss текст — владельцу\n"
         "/for <id> | текст — человеку\n"
         "Или текстом: «поставь задачу всем проверить отзывы»\n"
+        "Можно одним сообщением сразу несколько:\n"
+        "Поставь задачу «Ангелина»: …\n"
+        "Поставь задачу «София»: …\n"
         "/my — мои открытые\n"
         "/team — у кого что (+ кнопки сотрудников)\n"
         "/name Имя — как тебя зовут в CRM\n"
@@ -1277,6 +1314,127 @@ def build_dispatcher(
                     "Добавить комментарий к этой задаче?",
                     reply_markup=ask_comment_kb(task.id),
                 )
+
+    @dp.callback_query(F.data.startswith("tcb:"))
+    async def on_bulk_task_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+        """Подтвердить или отменить пачку черновиков."""
+        if not callback.data or not callback.from_user:
+            return
+        parts = callback.data.split(":")
+        if len(parts) != 3 or parts[1] not in {"ok", "no"}:
+            await callback.answer("Битая кнопка", show_alert=True)
+            return
+        decision = parts[1]
+        batch_key = parts[2]
+        uid = int(callback.from_user.id)
+        data = await state.get_data()
+        batches = dict(data.get("tc_batches") or {})
+        batch = batches.get(batch_key) or {}
+        task_ids = [int(x) for x in (batch.get("task_ids") or []) if str(x).isdigit()]
+        owner_tid = int(batch.get("owner_tid") or 0)
+        if not task_ids:
+            await callback.answer("Пачка уже обработана или устарела", show_alert=True)
+            return
+        if uid != int(settings.owner_telegram_id) and uid != owner_tid:
+            await callback.answer("Только автор может подтвердить", show_alert=True)
+            return
+
+        from app.tasks_service import add_event
+
+        async with session_factory() as session:
+            tasks: list[Task] = []
+            for tid in task_ids:
+                task = await session.scalar(
+                    select(Task)
+                    .where(Task.id == tid)
+                    .options(
+                        selectinload(Task.assignee),
+                        selectinload(Task.created_by),
+                        selectinload(Task.assignees).selectinload(TaskAssignee.employee),
+                    )
+                )
+                if task:
+                    tasks.append(task)
+
+            if decision == "no":
+                for task in tasks:
+                    if task.active:
+                        continue
+                    task.active = False
+                    await add_event(
+                        session,
+                        task.id,
+                        "Черновик удалён без отправки (пачка)",
+                        kind="deleted",
+                        actor_id=task.created_by_id,
+                    )
+                await session.commit()
+                batches.pop(batch_key, None)
+                await state.update_data(tc_batches=batches)
+                await callback.answer("Отменено")
+                if callback.message:
+                    try:
+                        await callback.message.edit_text(
+                            f"🗑 Отменено: {len(tasks)} задач, никому не отправили."
+                        )
+                    except Exception:
+                        pass
+                return
+
+            today = datetime.now(settings.tz).date()
+            sent = 0
+            skipped = 0
+            errors: list[str] = []
+            for task in tasks:
+                if task.active:
+                    skipped += 1
+                    continue
+                task.active = True
+                await add_event(
+                    session,
+                    task.id,
+                    "Подтверждена и отправлена (пачка)",
+                    kind="created",
+                    actor_id=task.created_by_id,
+                )
+                await session.commit()
+                targets = [
+                    link.employee
+                    for link in (task.assignees or [])
+                    if link.employee
+                ]
+                if not targets and task.assignee:
+                    targets = [task.assignee]
+                if task.kind == "once" and targets:
+                    ok, err = await notify_task_assignee(
+                        bot=callback.bot,
+                        session=session,
+                        task=task,
+                        due=task.due_date or today,
+                        employees=targets,
+                    )
+                    if ok:
+                        sent += 1
+                    elif err:
+                        errors.append(f"#{task.id}: {err}")
+                else:
+                    sent += 1
+
+            batches.pop(batch_key, None)
+            await state.update_data(tc_batches=batches)
+            reply = (
+                f"✅ Пачка отправлена: задач {len(tasks)}, "
+                f"уведомлений ~{sent}"
+                + (f", уже были активны {skipped}" if skipped else "")
+            )
+            if errors:
+                reply += "\n⚠️ " + "; ".join(errors[:5])
+            await callback.answer("Отправлено")
+            if callback.message:
+                try:
+                    await callback.message.edit_text(reply)
+                except Exception:
+                    await callback.message.answer(reply)
 
     @dp.callback_query(F.data.startswith("doing:") | F.data.startswith("done:"))
     async def on_task_status(callback: CallbackQuery) -> None:
@@ -2136,10 +2294,79 @@ def build_dispatcher(
                 people = (
                     await session.scalars(select(Employee).where(Employee.active.is_(True)))
                 ).all()
+                from app.bulk_tasks import (
+                    count_task_verbs,
+                    parse_bulk_task_items,
+                    resolve_bulk_assignees,
+                )
                 from app.nlp import parse_intent
 
                 is_owner = message.from_user.id == settings.owner_telegram_id
                 visible_people = await load_visible_employees(session, author)
+
+                # Пачка: несколько «Поставь задачу Кому: …» в одном сообщении
+                bulk_items = parse_bulk_task_items(task_text)
+                if len(bulk_items) >= 2 or (
+                    len(bulk_items) >= 1 and count_task_verbs(task_text) >= 2
+                ):
+                    created_rows: list[tuple[Task, str | None]] = []
+                    for item in bulk_items:
+                        targets, warn = resolve_bulk_assignees(
+                            list(people), item.assignee_raw, author=author
+                        )
+                        due_hint = "default"
+                        low = item.title.lower()
+                        if any(
+                            w in low
+                            for w in (
+                                "срочно",
+                                "ближайшие полчаса",
+                                "сегодня",
+                                "в течение часа",
+                            )
+                        ):
+                            due_hint = "today"
+                        task, _ok, _err, clarify = await create_and_notify(
+                            session=session,
+                            bot=message.bot,
+                            settings=settings,
+                            title=item.title,
+                            assignees=targets,
+                            author=author,
+                            due_hint=due_hint,
+                        )
+                        if clarify:
+                            # артикул неоднозначен — пропускаем с пометкой
+                            warn = (warn + "; " if warn else "") + clarify
+                            continue
+                        if not task:
+                            continue
+                        if "срочн" in low:
+                            task.priority = "high"
+                            await session.commit()
+                        created_rows.append((task, warn))
+                    if not created_rows:
+                        await wait.edit_text(
+                            "Не удалось разобрать задачи из сообщения. "
+                            "Формат: «Поставь задачу Имя: текст» — каждая с новой строки."
+                        )
+                        return
+                    batch_key = secrets.token_hex(4)
+                    data = await state.get_data()
+                    batches = dict(data.get("tc_batches") or {})
+                    batches[batch_key] = {
+                        "task_ids": [t.id for t, _w in created_rows],
+                        "owner_tid": int(message.from_user.id),
+                    }
+                    await state.update_data(tc_batches=batches)
+                    text = format_bulk_confirm_text(created_rows)
+                    kb = confirm_bulk_kb(batch_key)
+                    try:
+                        await wait.edit_text(text, reply_markup=kb, parse_mode="HTML")
+                    except Exception:
+                        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+                    return
+
                 named_early = find_named_assignees(
                     task_text, list(people), author=author
                 )
