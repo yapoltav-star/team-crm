@@ -1771,6 +1771,48 @@ body.dlg-open {
   font-size: 1.05rem;
 }
 
+.auto-reassign {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.auto-reassign-select {
+  flex: 1 1 160px;
+  min-width: 140px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg, var(--card));
+  color: inherit;
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.auto-reassign-go {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  padding: 0.4rem 0.7rem;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.auto-reassign-go:hover {
+  border-color: #5a4e42;
+}
+
+.auto-reassign-go:disabled,
+.auto-reassign-select:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 #tplDlg { width: min(480px, 94vw); }
 #tplDlg form { display: grid; gap: 0.65rem; }
 #tplDlg label {

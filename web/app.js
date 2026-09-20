@@ -1305,6 +1305,7 @@ function renderAutoTaskCard(t) {
       ? [t.assignee_name]
       : []
   ).join(", ");
+  const isOpen = t.status !== "done" && !t.archived && !t.archived_at;
   const statusLabel =
     t.archived || t.archived_at
       ? "архив"
@@ -1313,6 +1314,24 @@ function renderAutoTaskCard(t) {
         : t.status === "doing"
           ? "в работе"
           : "новая";
+  const managers =
+    isOpen && canReassignTasks() ? managersForReassign(t) : [];
+  const reassignHtml = managers.length
+    ? `<div class="auto-reassign">
+        <select class="auto-reassign-select" title="Кому перекинуть">
+          <option value="">Перекинуть на…</option>
+          ${managers
+            .map(
+              (e) =>
+                `<option value="${e.id}">${escapeHtml(e.name)}${
+                  e.job_title ? ` · ${escapeHtml(e.job_title)}` : ""
+                }</option>`
+            )
+            .join("")}
+        </select>
+        <button type="button" class="auto-reassign-go">Перекинуть</button>
+      </div>`
+    : "";
   const el = document.createElement("article");
   el.className = "tpl-card";
   el.innerHTML = `
@@ -1327,8 +1346,42 @@ function renderAutoTaskCard(t) {
       ${t.created_at ? `<span class="chip">${escapeHtml(formatDt(t.created_at))}</span>` : ""}
       ${t.articles ? `<span class="chip project">${escapeHtml(t.articles)}</span>` : ""}
     </div>
+    ${reassignHtml}
   `;
-  el.addEventListener("click", () => openTaskDialog(t.id));
+  el.addEventListener("click", (ev) => {
+    if (ev.target.closest(".auto-reassign")) return;
+    openTaskDialog(t.id);
+  });
+  const goBtn = el.querySelector(".auto-reassign-go");
+  const sel = el.querySelector(".auto-reassign-select");
+  if (goBtn && sel) {
+    goBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const empId = Number(sel.value);
+      if (!empId) {
+        alert("Выбери менеджера");
+        return;
+      }
+      goBtn.disabled = true;
+      sel.disabled = true;
+      try {
+        await api(`/api/tasks/${t.id}/reassign`, {
+          method: "POST",
+          body: JSON.stringify({
+            assignee_id: empId,
+            actor_id: state.meId || null,
+            notify: true,
+          }),
+        });
+        await load();
+        if (state.view === "auto") await renderAutoTasks();
+      } catch (err) {
+        alert(err.message || String(err));
+        goBtn.disabled = false;
+        sel.disabled = false;
+      }
+    });
+  }
   return el;
 }
 
