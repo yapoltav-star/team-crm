@@ -1224,13 +1224,66 @@ dialog.drawer[open] {
 .drawer-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 0.75rem;
   padding: 0.9rem 1rem;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
 
+.drawer-head-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+  flex: 1;
+}
+
 .drawer-head h3 { margin: 0; }
+
+.dlg-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.dlg-status-btn {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  padding: 0.35rem 0.75rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.dlg-status-btn:hover {
+  border-color: #5a4e42;
+}
+
+.dlg-status-btn.doing {
+  border-color: color-mix(in srgb, #3b82f6 55%, var(--line));
+  color: #93c5fd;
+}
+
+.dlg-status-btn.done {
+  border-color: color-mix(in srgb, #22c55e 45%, var(--line));
+  color: #86efac;
+}
+
+.dlg-status-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+html:not([data-theme="dark"]) .dlg-status-btn.doing {
+  color: #1d4ed8;
+}
+
+html:not([data-theme="dark"]) .dlg-status-btn.done {
+  color: #15803d;
+}
 
 .drawer-grid {
   display: grid;

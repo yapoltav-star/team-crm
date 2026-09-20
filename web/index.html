@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-22" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-23" />
 </head>
 <body>
   <header class="top">
@@ -164,7 +164,10 @@
   <dialog id="taskDlg" class="drawer">
     <form id="dlgForm">
       <header class="drawer-head">
-        <h3 id="dlgTitle">Задача</h3>
+        <div class="drawer-head-main">
+          <h3 id="dlgTitle">Задача</h3>
+          <div id="dlgStatusActions" class="dlg-status-actions"></div>
+        </div>
         <button type="button" id="dlgClose" class="ghost">✕</button>
       </header>
       <input type="hidden" name="id" />
@@ -382,6 +385,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-22"></script>
+  <script src="/static/app.js?v=pw-23"></script>
 </body>
 </html>

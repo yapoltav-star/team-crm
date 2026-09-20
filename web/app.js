@@ -1771,6 +1771,72 @@ function renderEvents(task) {
     .join("");
 }
 
+async function setTaskStatusFromDialog(status) {
+  const task = state.currentTask;
+  const id = Number(task?.id || $("#dlgForm")?.elements?.id?.value);
+  if (!id) return;
+  const body = { status, actor_id: state.meId || null };
+  if (status === "todo") {
+    body.theme_id = null;
+  } else if (status === "doing" || status === "done") {
+    const pick = await pickThemeForMove({
+      taskTitle: task?.title || "",
+      status,
+      preferredThemeId: task?.theme_id ?? null,
+    });
+    if (pick.cancelled) return;
+    body.theme_id = pick.themeId;
+  }
+  await api(`/api/tasks/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+  await openTaskDialog(id);
+  await load();
+}
+
+function renderDlgStatusActions(task) {
+  const box = $("#dlgStatusActions");
+  if (!box) return;
+  const st = task?.status || "todo";
+  const buttons = [];
+  if (st === "todo") {
+    buttons.push(
+      `<button type="button" class="dlg-status-btn doing" data-status="doing">🔵 В работу</button>`
+    );
+    buttons.push(
+      `<button type="button" class="dlg-status-btn done" data-status="done">✅ Сделано</button>`
+    );
+  } else if (st === "doing") {
+    buttons.push(
+      `<button type="button" class="dlg-status-btn done" data-status="done">✅ Сделано</button>`
+    );
+    buttons.push(
+      `<button type="button" class="dlg-status-btn" data-status="todo">↩ В новые</button>`
+    );
+  } else if (st === "done") {
+    buttons.push(
+      `<button type="button" class="dlg-status-btn doing" data-status="doing">🔵 Вернуть в работу</button>`
+    );
+  }
+  box.innerHTML = buttons.join("");
+  box.querySelectorAll("[data-status]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const next = btn.getAttribute("data-status");
+      if (!next) return;
+      box.querySelectorAll("button").forEach((b) => {
+        b.disabled = true;
+      });
+      try {
+        await setTaskStatusFromDialog(next);
+      } catch (err) {
+        alert(err.message || String(err));
+        renderDlgStatusActions(state.currentTask || task);
+      }
+    });
+  });
+}
+
 async function openTaskDialog(taskId) {
   const q = state.meId ? `?viewer_id=${state.meId}` : "";
   const task = await api(`/api/tasks/${taskId}${q}`);
@@ -1789,6 +1855,7 @@ async function openTaskDialog(taskId) {
     )[0] || "";
   form.elements.status.value = task.status || "todo";
   form.elements.due_date.value = task.due_date || "";
+  renderDlgStatusActions(task);
   const themeSel = form.elements.theme_id;
   const themes = boardThemes().slice();
   // если у задачи тема, которой нет в списке (чужая личная) — добавим
