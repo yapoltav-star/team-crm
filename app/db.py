@@ -54,6 +54,13 @@ async def init_db() -> None:
                 created_at TIMESTAMP
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key VARCHAR(80) PRIMARY KEY,
+                value TEXT DEFAULT '',
+                updated_at TIMESTAMP
+            )
+            """,
         ):
             try:
                 await conn.execute(text(stmt))

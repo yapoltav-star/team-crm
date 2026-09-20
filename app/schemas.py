@@ -168,6 +168,14 @@ class TaskReassignIn(BaseModel):
     notify: bool = True
 
 
+class AutoWatchAssigneesIn(BaseModel):
+    """Кому по умолчанию ставить автозадачи склада / полок."""
+
+    stock_assignee_id: int | None = None
+    shelf_assignee_id: int | None = None
+    actor_id: int | None = None
+
+
 class TaskOut(BaseModel):
     id: int
     title: str

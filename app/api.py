@@ -42,6 +42,7 @@ from app.schemas import (
     TaskOut,
     TaskPatch,
     TaskReassignIn,
+    AutoWatchAssigneesIn,
     TaskThemeIn,
     TaskThemeOut,
     TaskThemePatch,
@@ -1087,8 +1088,56 @@ async def list_auto_tasks(
         data["archived"] = t.archived_at is not None
         items.append(data)
 
+    from app.watch_assignees import (
+        KEY_SHELF_ASSIGNEE,
+        KEY_STOCK_ASSIGNEE,
+        SHELF_HOW_IT_WORKS,
+        STOCK_HOW_IT_WORKS,
+        get_assignee_id_setting,
+        resolve_shelf_assignee,
+        resolve_stock_assignee,
+    )
+
+    owner = await session.scalar(
+        select(Employee).where(Employee.role == "owner", Employee.active.is_(True))
+    )
+    if not owner and settings.owner_telegram_id:
+        owner = await session.scalar(
+            select(Employee).where(
+                Employee.telegram_id == int(settings.owner_telegram_id)
+            )
+        )
+
+    stock_assignee = (
+        await resolve_stock_assignee(session, settings, owner) if owner else None
+    )
+    shelf_assignee = (
+        await resolve_shelf_assignee(session, settings, owner) if owner else None
+    )
+    stock_override = await get_assignee_id_setting(session, KEY_STOCK_ASSIGNEE)
+    shelf_override = await get_assignee_id_setting(session, KEY_SHELF_ASSIGNEE)
+
+    managers = (
+        await session.scalars(
+            select(Employee)
+            .where(Employee.active.is_(True))
+            .order_by(Employee.name)
+        )
+    ).all()
+
+    def _emp_brief(e: Employee | None) -> dict | None:
+        if not e:
+            return None
+        return {
+            "id": e.id,
+            "name": e.name,
+            "job_title": e.job_title or "",
+            "role": e.role,
+        }
+
     return {
         "tasks": items,
+        "managers": [_emp_brief(e) for e in managers],
         "watches": {
             "stock": {
                 "label": "Наш склад",
@@ -1098,6 +1147,10 @@ async def list_auto_tasks(
                 "time": settings.stock_watch_time,
                 "cooldown_days": settings.stock_cooldown_days,
                 "last": getattr(request.app.state, "last_stock_watch", None),
+                "how_it_works": STOCK_HOW_IT_WORKS,
+                "assignee_id": stock_assignee.id if stock_assignee else None,
+                "assignee_name": stock_assignee.name if stock_assignee else None,
+                "assignee_override": bool(stock_override),
             },
             "shelf": {
                 "label": "Полки своих",
@@ -1108,8 +1161,61 @@ async def list_auto_tasks(
                 "cooldown_days": settings.shelf_cooldown_days,
                 "min_mine_pct": settings.shelf_min_mine_pct,
                 "last": getattr(request.app.state, "last_shelf_watch", None),
+                "how_it_works": SHELF_HOW_IT_WORKS,
+                "assignee_id": shelf_assignee.id if shelf_assignee else None,
+                "assignee_name": shelf_assignee.name if shelf_assignee else None,
+                "assignee_override": bool(shelf_override),
             },
         },
+    }
+
+
+@router.patch("/auto-tasks/assignees")
+async def patch_auto_watch_assignees(
+    body: AutoWatchAssigneesIn,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Сменить, кому по умолчанию ставить автозадачи склада / полок."""
+    from app.job_titles import can_reassign_tasks
+    from app.watch_assignees import (
+        KEY_SHELF_ASSIGNEE,
+        KEY_STOCK_ASSIGNEE,
+        get_assignee_id_setting,
+        set_assignee_id_setting,
+    )
+
+    actor: Employee | None = None
+    if body.actor_id is not None:
+        actor = await session.get(Employee, int(body.actor_id))
+    if not actor or not actor.active:
+        raise HTTPException(403, "Нужно войти на сайте")
+    if not can_reassign_tasks(role=actor.role, job_title=actor.job_title):
+        raise HTTPException(403, "Менять исполнителя могут владелец и рук")
+
+    async def _check(emp_id: int | None) -> int | None:
+        if emp_id is None:
+            return None
+        emp_id = int(emp_id)
+        if emp_id <= 0:
+            return None
+        emp = await session.get(Employee, emp_id)
+        if not emp or not emp.active:
+            raise HTTPException(404, f"Сотрудник #{emp_id} не найден")
+        return emp_id
+
+    if "stock_assignee_id" in body.model_fields_set:
+        await set_assignee_id_setting(
+            session, KEY_STOCK_ASSIGNEE, await _check(body.stock_assignee_id)
+        )
+    if "shelf_assignee_id" in body.model_fields_set:
+        await set_assignee_id_setting(
+            session, KEY_SHELF_ASSIGNEE, await _check(body.shelf_assignee_id)
+        )
+    await session.commit()
+    return {
+        "ok": True,
+        "stock_assignee_id": await get_assignee_id_setting(session, KEY_STOCK_ASSIGNEE),
+        "shelf_assignee_id": await get_assignee_id_setting(session, KEY_SHELF_ASSIGNEE),
     }
 
 

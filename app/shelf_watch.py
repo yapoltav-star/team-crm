@@ -221,17 +221,9 @@ async def run_shelf_watch(
         if not owner:
             return {"ok": False, "error": "владелец не найден в CRM", **meta}
 
-        # по умолчанию всегда владельцу; чужой ID — только если явно задан SHELF_ASSIGNEE
-        assignee = owner
-        if settings.shelf_assignee_telegram_id:
-            emp = await session.scalar(
-                select(Employee).where(
-                    Employee.telegram_id == int(settings.shelf_assignee_telegram_id),
-                    Employee.active.is_(True),
-                )
-            )
-            if emp:
-                assignee = emp
+        from app.watch_assignees import resolve_shelf_assignee
+
+        assignee = await resolve_shelf_assignee(session, settings, owner)
 
         existing = await _blocked_markers(
             session, cooldown_days=settings.shelf_cooldown_days

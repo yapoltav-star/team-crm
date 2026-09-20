@@ -1402,6 +1402,8 @@ async function renderAutoTasks() {
     return;
   }
   const watches = data.watches || {};
+  const managers = (data.managers || []).filter((e) => e && e.id);
+  const canEditAssignee = canReassignTasks();
   watchBox.innerHTML = "";
   for (const key of ["stock", "shelf"]) {
     const w = watches[key];
@@ -1409,6 +1411,17 @@ async function renderAutoTasks() {
     const card = document.createElement("article");
     card.className = "auto-watch-card";
     const endpoint = key === "stock" ? "/api/stock-watch/run" : "/api/shelf-watch/run";
+    const field = key === "stock" ? "stock_assignee_id" : "shelf_assignee_id";
+    const assigneeOpts = managers
+      .map(
+        (e) =>
+          `<option value="${e.id}" ${
+            Number(w.assignee_id) === Number(e.id) ? "selected" : ""
+          }>${escapeHtml(e.name)}${
+            e.job_title ? ` · ${escapeHtml(e.job_title)}` : ""
+          }${e.role === "owner" ? " · владелец" : ""}</option>`
+      )
+      .join("");
     card.innerHTML = `
       <div class="auto-watch-top">
         <div>
@@ -1419,6 +1432,22 @@ async function renderAutoTasks() {
         </div>
         <button type="button" class="ghost auto-run-btn" data-endpoint="${endpoint}">Запустить сейчас</button>
       </div>
+      <p class="auto-how">${escapeHtml(w.how_it_works || "")}</p>
+      <div class="auto-assignee-row">
+        <label class="auto-assignee-label">Кому ставить все новые задачи этого типа
+          <select class="auto-assignee-select" ${canEditAssignee ? "" : "disabled"}>
+            ${assigneeOpts || `<option value="">—</option>`}
+          </select>
+        </label>
+        ${
+          canEditAssignee
+            ? `<button type="button" class="auto-assignee-save">Сохранить</button>`
+            : w.assignee_name
+              ? `<span class="chip assignee">сейчас: ${escapeHtml(w.assignee_name)}</span>`
+              : ""
+        }
+      </div>
+      <p class="auto-assignee-hint">Уже созданные задачи не меняются — их можно перекинуть в списке ниже. После сохранения новые автозапуски пойдут выбранному человеку.</p>
       <p class="auto-watch-last">${escapeHtml(formatWatchLast(w.last))}</p>
     `;
     card.querySelector(".auto-run-btn")?.addEventListener("click", async (ev) => {
@@ -1437,6 +1466,33 @@ async function renderAutoTasks() {
         btn.textContent = "Запустить сейчас";
       }
     });
+    const saveBtn = card.querySelector(".auto-assignee-save");
+    const sel = card.querySelector(".auto-assignee-select");
+    if (saveBtn && sel) {
+      saveBtn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const empId = Number(sel.value);
+        if (!empId) {
+          alert("Выбери менеджера");
+          return;
+        }
+        saveBtn.disabled = true;
+        sel.disabled = true;
+        try {
+          const payload = { actor_id: state.meId || null };
+          payload[field] = empId;
+          await api("/api/auto-tasks/assignees", {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+          });
+          await renderAutoTasks();
+        } catch (err) {
+          alert(err.message || String(err));
+          saveBtn.disabled = false;
+          sel.disabled = false;
+        }
+      });
+    }
     watchBox.appendChild(card);
   }
 

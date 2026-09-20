@@ -1759,6 +1759,68 @@ body.dlg-open {
   line-height: 1.35;
 }
 
+.auto-how {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.auto-assignee-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.auto-assignee-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1 1 180px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.auto-assignee-select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg, var(--card));
+  color: inherit;
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.auto-assignee-save {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  padding: 0.4rem 0.75rem;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.auto-assignee-save:hover {
+  border-color: #5a4e42;
+}
+
+.auto-assignee-save:disabled,
+.auto-assignee-select:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.auto-assignee-hint {
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
 .auto-section-head {
   display: flex;
   align-items: baseline;
