@@ -84,6 +84,7 @@ async def lifespan(app: FastAPI):
         from apscheduler.triggers.cron import CronTrigger
 
         from app.stock_watch import run_stock_watch
+        from app.watch_assignees import get_watch_schedule
 
         async def stock_tick() -> None:
             result = await run_stock_watch(
@@ -94,12 +95,14 @@ async def lifespan(app: FastAPI):
             app.state.last_stock_watch = result
             logger.info("stock_watch: %s", result)
 
-        raw_time = (settings.stock_watch_time or "09:00").strip()
+        async with SessionLocal() as session:
+            stock_sched = await get_watch_schedule(session, settings, kind="stock")
+        raw_time = stock_sched["time"]
         try:
             hh, mm = [int(x) for x in raw_time.split(":")[:2]]
         except Exception:  # noqa: BLE001
             hh, mm = 9, 0
-        days = (settings.stock_watch_days or "mon,wed,fri").strip() or "mon,wed,fri"
+        days = stock_sched["days"] or "mon,wed,fri"
         scheduler.add_job(
             stock_tick,
             CronTrigger(
@@ -126,6 +129,7 @@ async def lifespan(app: FastAPI):
         from apscheduler.triggers.cron import CronTrigger
 
         from app.shelf_watch import run_shelf_watch
+        from app.watch_assignees import get_watch_schedule
 
         async def shelf_tick() -> None:
             result = await run_shelf_watch(
@@ -136,12 +140,14 @@ async def lifespan(app: FastAPI):
             app.state.last_shelf_watch = result
             logger.info("shelf_watch: %s", result)
 
-        raw_time = (settings.shelf_watch_time or "10:00").strip()
+        async with SessionLocal() as session:
+            shelf_sched = await get_watch_schedule(session, settings, kind="shelf")
+        raw_time = shelf_sched["time"]
         try:
             hh, mm = [int(x) for x in raw_time.split(":")[:2]]
         except Exception:  # noqa: BLE001
             hh, mm = 10, 0
-        days = (settings.shelf_watch_days or "tue,thu").strip() or "tue,thu"
+        days = shelf_sched["days"] or "tue,thu"
         scheduler.add_job(
             shelf_tick,
             CronTrigger(

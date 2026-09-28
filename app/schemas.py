@@ -201,6 +201,19 @@ class ShelfExcludeIn(BaseModel):
     """Какие артикулы не проверять в «Полки своих» (снятые в таблице)."""
 
     exclude_codes: list[str] = []
+    days: str | None = None
+    time: str | None = None
+    comment: str | None = None
+    actor_id: int | None = None
+
+
+class WatchScheduleIn(BaseModel):
+    """Расписание и комментарий автозадачи склада / полок."""
+
+    kind: str  # stock | shelf
+    days: str | None = None
+    time: str | None = None
+    comment: str | None = None
     actor_id: int | None = None
 
 

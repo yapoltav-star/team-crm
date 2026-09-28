@@ -18,8 +18,16 @@ KEY_SHELF_ASSIGNEE = "shelf_assignee_id"
 KEY_STOCK_PAUSED = "stock_watch_paused"
 KEY_SHELF_PAUSED = "shelf_watch_paused"
 KEY_SHELF_EXCLUDE = "shelf_watch_exclude"
+KEY_STOCK_DAYS = "stock_watch_days"
+KEY_STOCK_TIME = "stock_watch_time"
+KEY_STOCK_COMMENT = "stock_watch_comment"
+KEY_SHELF_DAYS = "shelf_watch_days"
+KEY_SHELF_TIME = "shelf_watch_time"
+KEY_SHELF_COMMENT = "shelf_watch_comment"
 
 _TRUTHY = {"1", "true", "yes", "on", "y"}
+_VALID_DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+_DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 STOCK_HOW_IT_WORKS = (
     "Раз в выбранные дни бот смотрит остатки на «нашем складе» в WB Dashboard. "
@@ -131,6 +139,127 @@ async def effective_shelf_exclude_set(
     env = set(settings.shelf_exclude_set)
     ui = {c.casefold() for c in await load_shelf_exclude_codes(session)}
     return env | ui
+
+
+def normalize_watch_days(raw: str | None, fallback: str) -> str:
+    parts = []
+    seen: set[str] = set()
+    for chunk in (raw or "").replace(";", ",").split(","):
+        d = chunk.strip().lower()[:3]
+        if d not in _VALID_DAYS or d in seen:
+            continue
+        seen.add(d)
+        parts.append(d)
+    if not parts:
+        for chunk in (fallback or "").replace(";", ",").split(","):
+            d = chunk.strip().lower()[:3]
+            if d in _VALID_DAYS and d not in seen:
+                seen.add(d)
+                parts.append(d)
+    if not parts:
+        parts = ["mon", "wed", "fri"]
+    parts.sort(key=lambda x: _DAY_ORDER.index(x))
+    return ",".join(parts)
+
+
+def normalize_watch_time(raw: str | None, fallback: str) -> str:
+    text = (raw or "").strip() or (fallback or "").strip() or "09:00"
+    try:
+        hh_s, mm_s = text.split(":")[:2]
+        hh, mm = int(hh_s), int(mm_s)
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            raise ValueError("range")
+        return f"{hh:02d}:{mm:02d}"
+    except Exception:
+        try:
+            hh_s, mm_s = (fallback or "09:00").split(":")[:2]
+            return f"{int(hh_s):02d}:{int(mm_s):02d}"
+        except Exception:
+            return "09:00"
+
+
+async def get_watch_schedule(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    kind: str,
+) -> dict[str, str]:
+    """kind: stock | shelf → days, time, comment (DB override или env)."""
+    if kind == "shelf":
+        days_fb = settings.shelf_watch_days or "tue,thu"
+        time_fb = settings.shelf_watch_time or "10:00"
+        days_key, time_key, comment_key = KEY_SHELF_DAYS, KEY_SHELF_TIME, KEY_SHELF_COMMENT
+    else:
+        days_fb = settings.stock_watch_days or "mon,wed,fri"
+        time_fb = settings.stock_watch_time or "09:00"
+        days_key, time_key, comment_key = KEY_STOCK_DAYS, KEY_STOCK_TIME, KEY_STOCK_COMMENT
+    days_raw = (await get_setting(session, days_key)).strip() or days_fb
+    time_raw = (await get_setting(session, time_key)).strip() or time_fb
+    comment = (await get_setting(session, comment_key)).strip()
+    return {
+        "days": normalize_watch_days(days_raw, days_fb),
+        "time": normalize_watch_time(time_raw, time_fb),
+        "comment": comment[:1000],
+    }
+
+
+async def save_watch_schedule(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    kind: str,
+    days: str | None = None,
+    time: str | None = None,
+    comment: str | None = None,
+) -> dict[str, str]:
+    if kind == "shelf":
+        days_fb = settings.shelf_watch_days or "tue,thu"
+        time_fb = settings.shelf_watch_time or "10:00"
+        days_key, time_key, comment_key = KEY_SHELF_DAYS, KEY_SHELF_TIME, KEY_SHELF_COMMENT
+    else:
+        days_fb = settings.stock_watch_days or "mon,wed,fri"
+        time_fb = settings.stock_watch_time or "09:00"
+        days_key, time_key, comment_key = KEY_STOCK_DAYS, KEY_STOCK_TIME, KEY_STOCK_COMMENT
+    if days is not None:
+        await set_setting(session, days_key, normalize_watch_days(days, days_fb))
+    if time is not None:
+        await set_setting(session, time_key, normalize_watch_time(time, time_fb))
+    if comment is not None:
+        await set_setting(session, comment_key, str(comment).strip()[:1000])
+    return await get_watch_schedule(session, settings, kind=kind)
+
+
+def reschedule_watch_job(scheduler, settings: Settings, *, kind: str, days: str, time: str) -> None:
+    """Обновить cron у APScheduler (если job есть)."""
+    if scheduler is None:
+        return
+    job_id = "shelf_watch" if kind == "shelf" else "stock_watch"
+    try:
+        hh, mm = [int(x) for x in normalize_watch_time(time, "09:00").split(":")[:2]]
+    except Exception:
+        hh, mm = (10, 0) if kind == "shelf" else (9, 0)
+    days_norm = normalize_watch_days(
+        days,
+        (settings.shelf_watch_days if kind == "shelf" else settings.stock_watch_days) or "mon",
+    )
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+
+        job = scheduler.get_job(job_id)
+        if not job:
+            return
+        scheduler.reschedule_job(
+            job_id,
+            trigger=CronTrigger(
+                day_of_week=days_norm,
+                hour=hh,
+                minute=mm,
+                timezone=settings.tz_name,
+            ),
+        )
+        logger.info("rescheduled %s → %s @ %02d:%02d", job_id, days_norm, hh, mm)
+    except Exception:
+        logger.exception("reschedule %s failed", job_id)
 
 
 async def _emp_by_id(session: AsyncSession, emp_id: int | None) -> Employee | None:

@@ -1514,6 +1514,11 @@ async function renderAutoTasks() {
             }Кликни карточку или «Артикулы», чтобы выбрать список и человека.</p>`
           : ""
       }
+      ${
+        w.comment
+          ? `<p class="auto-assignee-hint"><b>Коммент:</b> ${escapeHtml(w.comment)}</p>`
+          : ""
+      }
       <p class="auto-watch-last">${escapeHtml(formatWatchLast(w.last))}</p>
     `;
     if (onOpen) {
@@ -1719,6 +1724,35 @@ function renderStockPickTable() {
   updateStockPickSelectedCount();
 }
 
+function setStockPickScheduleFields(days, time, comment) {
+  const daySet = new Set(
+    String(days || "")
+      .split(",")
+      .map((d) => d.trim().toLowerCase().slice(0, 3))
+      .filter(Boolean)
+  );
+  $("#stockPickDays")
+    ?.querySelectorAll('input[type="checkbox"]')
+    .forEach((cb) => {
+      cb.checked = daySet.has(cb.value);
+    });
+  const timeEl = $("#stockPickTime");
+  if (timeEl) timeEl.value = String(time || "09:00").slice(0, 5);
+  const commentEl = $("#stockPickComment");
+  if (commentEl) commentEl.value = comment || "";
+}
+
+function readStockPickScheduleFields() {
+  const days = [
+    ...($("#stockPickDays")?.querySelectorAll('input[type="checkbox"]:checked') || []),
+  ]
+    .map((cb) => cb.value)
+    .join(",");
+  const time = ($("#stockPickTime") && $("#stockPickTime").value) || "";
+  const comment = ($("#stockPickComment") && $("#stockPickComment").value) || "";
+  return { days, time, comment };
+}
+
 async function openStockPickDialog(pick, managers) {
   const dlg = $("#stockPickDlg");
   if (!dlg) return;
@@ -1729,7 +1763,7 @@ async function openStockPickDialog(pick, managers) {
   const hint = $("#stockPickHint");
   if (hint) {
     hint.textContent =
-      "Отметь артикулы — по ним задачи пойдут выбранному человеку. Остальные остаются в общей «Наш склад».";
+      "Отметь артикулы — по ним задачи пойдут выбранному человеку. Остальные остаются в общей «Наш склад». Дни/время — общее расписание склада.";
   }
   const wrap = $("#stockPickAssigneeWrap");
   if (wrap) wrap.style.display = "";
@@ -1751,6 +1785,16 @@ async function openStockPickDialog(pick, managers) {
   STOCK_PICK_SELECTED = new Set(
     (pick.vendor_codes || []).map((c) => String(c).toLowerCase())
   );
+  // расписание склада (общее)
+  try {
+    const data = await api(
+      `/api/auto-tasks${state.meId ? `?viewer_id=${state.meId}` : ""}`
+    );
+    const stock = (data.watches && data.watches.stock) || {};
+    setStockPickScheduleFields(stock.days, stock.time, stock.comment);
+  } catch (_) {
+    setStockPickScheduleFields(pick.days, pick.time, "");
+  }
   const search = $("#stockPickSearch");
   if (search) search.value = "";
   try {
@@ -1782,12 +1826,13 @@ async function openShelfExcludeDialog(shelf) {
   const hint = $("#stockPickHint");
   if (hint) {
     hint.textContent =
-      "Галочка = следим. Сними с ненужных — по ним «Полка слабая» не создаётся. Поиск сверху.";
+      "Галочка = следим. Сними с ненужных — по ним «Полка слабая» не создаётся. Дни, время и комментарий — ниже/выше.";
   }
   const wrap = $("#stockPickAssigneeWrap");
   if (wrap) wrap.style.display = "none";
   $("#stockPickSave").disabled = !canEdit;
   $("#stockPickDelete").style.display = "none";
+  setStockPickScheduleFields(shelf.days, shelf.time, shelf.comment);
   const search = $("#stockPickSearch");
   if (search) search.value = "";
 
@@ -1885,10 +1930,18 @@ function bindStockPickDialog() {
           if (STOCK_PICK_LOCKED.has(key)) continue; // env — уже на сервере
           if (!STOCK_PICK_SELECTED.has(key)) exclude.push(vc);
         }
+        const sched = readStockPickScheduleFields();
+        if (!sched.days) {
+          alert("Выбери хотя бы один день");
+          return;
+        }
         await api("/api/auto-tasks/shelf-exclude", {
           method: "PATCH",
           body: JSON.stringify({
             exclude_codes: exclude,
+            days: sched.days,
+            time: sched.time,
+            comment: sched.comment,
             actor_id: state.meId || null,
           }),
         });
@@ -1902,12 +1955,27 @@ function bindStockPickDialog() {
         const codes = [...STOCK_PICK_SELECTED].map(
           (k) => (window.__stockPickCanon && window.__stockPickCanon[k]) || k
         );
+        const sched = readStockPickScheduleFields();
+        if (!sched.days) {
+          alert("Выбери хотя бы один день");
+          return;
+        }
         await api("/api/auto-tasks/stock-pick", {
           method: "PATCH",
           body: JSON.stringify({
             id,
             assignee_id: assigneeId,
             vendor_codes: codes,
+            actor_id: state.meId || null,
+          }),
+        });
+        await api("/api/auto-tasks/schedule", {
+          method: "PATCH",
+          body: JSON.stringify({
+            kind: "stock",
+            days: sched.days,
+            time: sched.time,
+            comment: sched.comment,
             actor_id: state.meId || null,
           }),
         });

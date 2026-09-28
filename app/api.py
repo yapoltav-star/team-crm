@@ -46,6 +46,7 @@ from app.schemas import (
     AutoWatchPauseIn,
     ShelfExcludeIn,
     StockPickRouteIn,
+    WatchScheduleIn,
     TaskThemeIn,
     TaskThemeOut,
     TaskThemePatch,
@@ -1099,6 +1100,7 @@ async def list_auto_tasks(
         SHELF_HOW_IT_WORKS,
         STOCK_HOW_IT_WORKS,
         get_assignee_id_setting,
+        get_watch_schedule,
         is_watch_paused,
         load_shelf_exclude_codes,
         resolve_shelf_assignee,
@@ -1127,6 +1129,8 @@ async def list_auto_tasks(
     shelf_paused = await is_watch_paused(session, KEY_SHELF_PAUSED)
     shelf_ui_excludes = await load_shelf_exclude_codes(session)
     shelf_env_excludes = sorted(settings.shelf_exclude_set)
+    stock_sched = await get_watch_schedule(session, settings, kind="stock")
+    shelf_sched = await get_watch_schedule(session, settings, kind="shelf")
 
     managers = (
         await session.scalars(
@@ -1143,8 +1147,8 @@ async def list_auto_tasks(
         session,
         managers_by_id=managers_by_id,
         stock_enabled=bool(settings.stock_watch_enabled),
-        stock_days=settings.stock_watch_days,
-        stock_time=settings.stock_watch_time,
+        stock_days=stock_sched["days"],
+        stock_time=stock_sched["time"],
         cooldown_days=settings.stock_cooldown_days,
     )
     await session.commit()
@@ -1169,8 +1173,9 @@ async def list_auto_tasks(
                 "enabled": bool(settings.stock_watch_enabled),
                 "paused": stock_paused,
                 "active": bool(settings.stock_watch_enabled) and not stock_paused,
-                "days": settings.stock_watch_days,
-                "time": settings.stock_watch_time,
+                "days": stock_sched["days"],
+                "time": stock_sched["time"],
+                "comment": stock_sched["comment"],
                 "cooldown_days": settings.stock_cooldown_days,
                 "last": getattr(request.app.state, "last_stock_watch", None),
                 "how_it_works": STOCK_HOW_IT_WORKS,
@@ -1184,8 +1189,9 @@ async def list_auto_tasks(
                 "enabled": bool(settings.shelf_watch_enabled),
                 "paused": shelf_paused,
                 "active": bool(settings.shelf_watch_enabled) and not shelf_paused,
-                "days": settings.shelf_watch_days,
-                "time": settings.shelf_watch_time,
+                "days": shelf_sched["days"],
+                "time": shelf_sched["time"],
+                "comment": shelf_sched["comment"],
                 "cooldown_days": settings.shelf_cooldown_days,
                 "min_mine_pct": settings.shelf_min_mine_pct,
                 "last": getattr(request.app.state, "last_shelf_watch", None),
@@ -1195,7 +1201,10 @@ async def list_auto_tasks(
                 "assignee_override": bool(shelf_override),
                 "exclude_codes": shelf_ui_excludes,
                 "env_exclude_codes": shelf_env_excludes,
-                "exclude_count": len(set(shelf_ui_excludes) | set(shelf_env_excludes)),
+                "exclude_count": len(
+                    {c.casefold() for c in shelf_ui_excludes}
+                    | set(shelf_env_excludes)
+                ),
             },
             "stock_picks": stock_picks,
         },
@@ -1344,12 +1353,19 @@ async def patch_stock_pick_route(
 
 @router.patch("/auto-tasks/shelf-exclude")
 async def patch_shelf_exclude(
+    request: Request,
     body: ShelfExcludeIn,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Сохранить список артикулов, которые не проверять в «Полки своих»."""
+    """Сохранить исключения артикулов + расписание/коммент «Полки своих»."""
     from app.job_titles import can_reassign_tasks
-    from app.watch_assignees import load_shelf_exclude_codes, save_shelf_exclude_codes
+    from app.watch_assignees import (
+        get_watch_schedule,
+        load_shelf_exclude_codes,
+        reschedule_watch_job,
+        save_shelf_exclude_codes,
+        save_watch_schedule,
+    )
 
     actor: Employee | None = None
     if body.actor_id is not None:
@@ -1359,13 +1375,74 @@ async def patch_shelf_exclude(
     if not can_reassign_tasks(role=actor.role, job_title=actor.job_title):
         raise HTTPException(403, "Исключения могут менять владелец и рук")
 
+    settings = get_settings()
     saved = await save_shelf_exclude_codes(session, body.exclude_codes or [])
+    sched = await save_watch_schedule(
+        session,
+        settings,
+        kind="shelf",
+        days=body.days if "days" in body.model_fields_set else None,
+        time=body.time if "time" in body.model_fields_set else None,
+        comment=body.comment if "comment" in body.model_fields_set else None,
+    )
     await session.commit()
+    reschedule_watch_job(
+        getattr(request.app.state, "scheduler", None),
+        settings,
+        kind="shelf",
+        days=sched["days"],
+        time=sched["time"],
+    )
     return {
         "ok": True,
         "exclude_codes": saved,
         "exclude_count": len(await load_shelf_exclude_codes(session)),
+        "days": sched["days"],
+        "time": sched["time"],
+        "comment": sched["comment"],
     }
+
+
+@router.patch("/auto-tasks/schedule")
+async def patch_watch_schedule(
+    request: Request,
+    body: WatchScheduleIn,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Расписание и комментарий для склада / полок."""
+    from app.job_titles import can_reassign_tasks
+    from app.watch_assignees import reschedule_watch_job, save_watch_schedule
+
+    kind = (body.kind or "").strip().lower()
+    if kind not in {"stock", "shelf"}:
+        raise HTTPException(400, "kind: stock или shelf")
+
+    actor: Employee | None = None
+    if body.actor_id is not None:
+        actor = await session.get(Employee, int(body.actor_id))
+    if not actor or not actor.active:
+        raise HTTPException(403, "Нужно войти на сайте")
+    if not can_reassign_tasks(role=actor.role, job_title=actor.job_title):
+        raise HTTPException(403, "Расписание могут менять владелец и рук")
+
+    settings = get_settings()
+    sched = await save_watch_schedule(
+        session,
+        settings,
+        kind=kind,
+        days=body.days if "days" in body.model_fields_set else None,
+        time=body.time if "time" in body.model_fields_set else None,
+        comment=body.comment if "comment" in body.model_fields_set else None,
+    )
+    await session.commit()
+    reschedule_watch_job(
+        getattr(request.app.state, "scheduler", None),
+        settings,
+        kind=kind,
+        days=sched["days"],
+        time=sched["time"],
+    )
+    return {"ok": True, "kind": kind, **sched}
 
 
 @router.post("/stock-watch/run")

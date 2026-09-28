@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-28" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-29" />
 </head>
 <body>
   <header class="top">
@@ -180,6 +180,24 @@
         </label>
         <label class="stock-pick-search-label">Поиск
           <input id="stockPickSearch" type="search" placeholder="Артикул…" autocomplete="off" />
+        </label>
+      </div>
+      <div class="stock-pick-schedule" id="stockPickSchedule">
+        <div class="stock-pick-days" id="stockPickDays">
+          <span class="stock-pick-days-label">Дни</span>
+          <label><input type="checkbox" value="mon" /> Пн</label>
+          <label><input type="checkbox" value="tue" /> Вт</label>
+          <label><input type="checkbox" value="wed" /> Ср</label>
+          <label><input type="checkbox" value="thu" /> Чт</label>
+          <label><input type="checkbox" value="fri" /> Пт</label>
+          <label><input type="checkbox" value="sat" /> Сб</label>
+          <label><input type="checkbox" value="sun" /> Вс</label>
+        </div>
+        <label class="stock-pick-time-label">Время
+          <input id="stockPickTime" type="time" />
+        </label>
+        <label class="stock-pick-comment-label">Комментарий
+          <input id="stockPickComment" type="text" maxlength="500" placeholder="Попадёт в задачу" autocomplete="off" />
         </label>
       </div>
       <p class="stock-pick-hint" id="stockPickHint">Отметь артикулы — по ним задачи пойдут выбранному человеку. Остальные остаются в общей «Наш склад».</p>
@@ -431,6 +449,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-28"></script>
+  <script src="/static/app.js?v=pw-29"></script>
 </body>
 </html>

@@ -219,6 +219,11 @@ async def run_stock_watch(
 
         default_assignee = await resolve_stock_assignee(session, settings, owner)
         default_paused = await is_watch_paused(session, KEY_STOCK_PAUSED)
+        from app.watch_assignees import get_watch_schedule
+
+        stock_comment = (
+            (await get_watch_schedule(session, settings, kind="stock")).get("comment") or ""
+        ).strip()
         logger.info(
             "stock_watch default assignee → %s (id=%s) paused=%s force=%s",
             default_assignee.name,
@@ -257,10 +262,10 @@ async def run_stock_watch(
                 continue
 
             title = f'Закупить {sku.vendor_code}, на вашем складе кончился'
-            desc = _marker(sku.family_key)
+            desc = marker if not stock_comment else f"{marker}\n{stock_comment}"
             task = Task(
                 title=title[:500],
-                description=desc,
+                description=desc[:4000],
                 articles=(sku.vendor_code[:500]),
                 assignee_id=assignee.id,
                 created_by_id=owner.id,

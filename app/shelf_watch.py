@@ -234,9 +234,11 @@ async def run_shelf_watch(
         if not owner:
             return {"ok": False, "error": "владелец не найден в CRM", **meta}
 
-        from app.watch_assignees import resolve_shelf_assignee
+        from app.watch_assignees import get_watch_schedule, resolve_shelf_assignee
 
         assignee = await resolve_shelf_assignee(session, settings, owner)
+        sched = await get_watch_schedule(session, settings, kind="shelf")
+        comment = (sched.get("comment") or "").strip()
 
         existing = await _blocked_markers(
             session, cooldown_days=settings.shelf_cooldown_days
@@ -253,10 +255,10 @@ async def run_shelf_watch(
                 f"Полка слабая: {row.vendor_code} — моя доля {row.mine_pct}% "
                 f"(<{settings.shelf_min_mine_pct:g}%)"
             )
-            desc = marker
+            desc = marker if not comment else f"{marker}\n{comment}"
             task = Task(
                 title=title[:500],
-                description=desc,
+                description=desc[:4000],
                 articles=(row.vendor_code[:500]),
                 assignee_id=assignee.id,
                 created_by_id=owner.id,

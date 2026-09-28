@@ -1869,6 +1869,59 @@ body.dlg-open {
   font: inherit;
 }
 
+.stock-pick-schedule {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: 1.6fr 0.7fr 1.2fr;
+  padding: 0.65rem 1rem 0;
+  align-items: end;
+}
+
+.stock-pick-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.55rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.stock-pick-days-label {
+  color: var(--muted);
+  margin-right: 0.15rem;
+}
+
+.stock-pick-days label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: inherit;
+}
+
+.stock-pick-time-label,
+.stock-pick-comment-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.stock-pick-time-label input,
+.stock-pick-comment-label input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+@media (max-width: 720px) {
+  .stock-pick-schedule {
+    grid-template-columns: 1fr;
+  }
+}
+
 .stock-pick-hint {
   margin: 0.75rem 1rem 0.4rem;
   font-size: 0.85rem;
