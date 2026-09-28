@@ -41,6 +41,13 @@ const JOB_TITLES = [
   "раздача",
 ];
 
+/** Быстрые кнопки «Перекинуть» в окне задачи — эти имена сверху. */
+const REASSIGN_QUICK = [
+  { name: "Афина" },
+  { name: "Заира" },
+  { name: "Ольга", team_group: "ПВС", job_title: "раздача" },
+];
+
 const JOB_TITLE_ORDER = Object.fromEntries(JOB_TITLES.map((t, i) => [t, i]));
 
 const PROJECT_COLORS = [
@@ -1909,7 +1916,58 @@ function managersForReassign(task) {
       pool = pool.filter((e) => String(e.team_group || "").trim() === team);
     }
   }
-  return pool.filter((e) => !current.has(Number(e.id)));
+  return prioritizeReassignManagers(
+    pool.filter((e) => !current.has(Number(e.id)))
+  );
+}
+
+function _nameKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("ё", "е");
+}
+
+function _firstName(value) {
+  return _nameKey(value).split(/\s+/)[0] || "";
+}
+
+function prioritizeReassignManagers(pool) {
+  const used = new Set();
+  const quick = [];
+  for (const want of REASSIGN_QUICK) {
+    const wantName = _nameKey(want.name);
+    const emp = pool.find((e) => {
+      if (used.has(e.id)) return false;
+      const first = _firstName(e.name);
+      const full = _nameKey(e.name);
+      if (first !== wantName && !full.startsWith(wantName)) return false;
+      if (
+        want.team_group &&
+        _nameKey(e.team_group) !== _nameKey(want.team_group)
+      ) {
+        return false;
+      }
+      if (
+        want.job_title &&
+        normJobTitle(e.job_title) !== normJobTitle(want.job_title)
+      ) {
+        return false;
+      }
+      return true;
+    });
+    if (emp) {
+      used.add(emp.id);
+      quick.push(emp);
+    }
+  }
+  const rest = pool
+    .filter((e) => !used.has(e.id))
+    .slice()
+    .sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), "ru")
+    );
+  return [...quick, ...rest];
 }
 
 function renderReassignButtons(task) {
