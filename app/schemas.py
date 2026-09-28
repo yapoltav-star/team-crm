@@ -59,7 +59,8 @@ class ProjectOut(BaseModel):
 class ArticleOut(BaseModel):
     vendor_code: str
     nm_id: int | None = None
-    stock: int = 0
+    stock: int = 0  # Склад WB РФ (живой из дашборда)
+    own_stock: int | None = None  # наш склад (семья), None = нет данных
     sales_90d: int = 0
 
     model_config = {"from_attributes": True}

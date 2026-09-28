@@ -377,24 +377,43 @@ async def home(
 
 @router.get("/articles", response_model=list[ArticleOut])
 async def list_articles(session: AsyncSession = Depends(get_session)) -> list[ArticleOut]:
-    rows = await load_catalog(session)
-    # живой остаток «Склад WB РФ» из дашборда; при сбое — seed из справочника
-    live: dict[str, int] = {}
-    try:
-        from app.dashboard_client import fetch_wb_rf_stock_by_vendor
+    import asyncio
 
-        live = await fetch_wb_rf_stock_by_vendor()
+    rows = await load_catalog(session)
+    wb_rf: dict[str, int] = {}
+    own_wh: dict[str, int] = {}
+    try:
+        from app.dashboard_client import (
+            fetch_own_warehouse_stock_by_vendor,
+            fetch_wb_rf_stock_by_vendor,
+        )
+
+        wb_res, own_res = await asyncio.gather(
+            fetch_wb_rf_stock_by_vendor(),
+            fetch_own_warehouse_stock_by_vendor(),
+            return_exceptions=True,
+        )
+        if isinstance(wb_res, dict):
+            wb_rf = wb_res
+        else:
+            logger.warning("wb-rf stock enrich failed: %s", wb_res)
+        if isinstance(own_res, dict):
+            own_wh = own_res
+        else:
+            logger.warning("own-wh stock enrich failed: %s", own_res)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("wb-rf stock enrich failed: %s", exc)
+        logger.warning("dashboard stock enrich failed: %s", exc)
     out: list[ArticleOut] = []
     for a in rows:
         key = str(a.vendor_code or "").casefold()
-        stock = int(live[key]) if key in live else int(a.stock or 0)
+        stock = int(wb_rf[key]) if key in wb_rf else int(a.stock or 0)
+        own = int(own_wh[key]) if key in own_wh else None
         out.append(
             ArticleOut(
                 vendor_code=a.vendor_code,
                 nm_id=a.nm_id,
                 stock=stock,
+                own_stock=own,
                 sales_90d=a.sales_90d,
             )
         )

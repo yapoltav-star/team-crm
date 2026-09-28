@@ -1697,7 +1697,7 @@ function renderStockPickTable() {
       .includes(q);
   });
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="${showThr ? 5 : 4}" class="stock-pick-empty">Ничего не найдено</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${showThr ? 6 : 5}" class="stock-pick-empty">Ничего не найдено</td></tr>`;
     return;
   }
   body.innerHTML = rows
@@ -1708,12 +1708,16 @@ function renderStockPickTable() {
       const locked = STOCK_PICK_LOCKED.has(key);
       const thr =
         STOCK_PICK_THRESHOLDS[key] != null ? Number(STOCK_PICK_THRESHOLDS[key]) : 0;
+      const own =
+        a.own_stock != null && Number.isFinite(Number(a.own_stock))
+          ? Number(a.own_stock)
+          : null;
       const thrCell = showThr
         ? `<td style="text-align:right">
             <input type="number" class="stock-pick-thr" data-vc="${escapeHtml(vc)}"
               min="0" step="1" value="${Number.isFinite(thr) ? thr : 0}"
               ${checked && !locked ? "" : "disabled"}
-              title="Задача, если остаток на складе ≤ этого числа" />
+              title="Задача, если остаток на нашем складе ≤ этого числа" />
           </td>`
         : "";
       return `<tr class="${locked ? "stock-pick-locked" : ""}">
@@ -1724,6 +1728,7 @@ function renderStockPickTable() {
           locked ? ' <span class="chip">фикс</span>' : ""
         }</td>
         <td style="text-align:right">${a.stock != null ? Number(a.stock) : "—"}</td>
+        <td style="text-align:right">${own != null ? own : "—"}</td>
         <td style="text-align:right">${a.sales_90d != null ? Number(a.sales_90d) : "—"}</td>
         ${thrCell}
       </tr>`;
@@ -1805,7 +1810,7 @@ async function openStockPickDialog(pick, managers) {
   const hint = $("#stockPickHint");
   if (hint) {
     hint.textContent =
-      "Отметь артикулы и у каждого поставь порог «Порог ≤» — задача придёт, если остаток на складе не больше этого числа. Дни/время — общее расписание склада.";
+      "Отметь артикулы и у каждого поставь порог «Порог ≤» — задача придёт, если на нашем складе остаток ≤ порога. Колонки WB РФ и Наш — живые из дашборда.";
   }
   const wrap = $("#stockPickAssigneeWrap");
   if (wrap) wrap.style.display = "";

@@ -20,6 +20,9 @@ _COOKIE_OK_UNTIL = 0.0
 _WB_RF_CACHE: dict[str, int] = {}
 _WB_RF_CACHE_UNTIL = 0.0
 _WB_RF_TTL_SEC = 120.0
+_OWN_WH_CACHE: dict[str, int] = {}
+_OWN_WH_CACHE_UNTIL = 0.0
+_OWN_WH_TTL_SEC = 120.0
 
 
 def _base_url(settings: Settings | None = None) -> str:
@@ -132,4 +135,51 @@ async def fetch_wb_rf_stock_by_vendor(
     _WB_RF_CACHE = out
     _WB_RF_CACHE_UNTIL = now + _WB_RF_TTL_SEC
     logger.info("wb-rf stock map: %s vendor codes", len(out))
+    return dict(out)
+
+
+async def fetch_own_warehouse_stock_by_vendor(
+    *,
+    settings: Settings | None = None,
+    force: bool = False,
+) -> dict[str, int]:
+    """vendor_code (casefold) → остаток семьи на «нашем складе» (family_stock)."""
+    global _OWN_WH_CACHE, _OWN_WH_CACHE_UNTIL
+    now = time.time()
+    if not force and _OWN_WH_CACHE and now < _OWN_WH_CACHE_UNTIL:
+        return dict(_OWN_WH_CACHE)
+    raw = await fetch_dashboard_json(
+        "/api/own-warehouse-stock", settings=settings, timeout_sec=90
+    )
+    if not isinstance(raw, dict):
+        raise ValueError("own-warehouse-stock: ожидался объект")
+    if raw.get("error") and not (raw.get("by_vendor") or {}):
+        raise RuntimeError(f"own-warehouse: {raw.get('error')}")
+    out: dict[str, int] = {}
+    by_vendor = raw.get("by_vendor") or {}
+    if not isinstance(by_vendor, dict):
+        by_vendor = {}
+    for vc, meta in by_vendor.items():
+        key = str(vc or "").strip().casefold()
+        if not key or not isinstance(meta, dict):
+            continue
+        try:
+            personal = int(meta.get("stock") or 0)
+        except (TypeError, ValueError):
+            personal = 0
+        fam = meta.get("family_stock")
+        try:
+            family_stock = int(fam) if fam is not None else personal
+        except (TypeError, ValueError):
+            family_stock = personal
+        family_stock = max(0, family_stock)
+        out[key] = family_stock
+        for member in meta.get("family") or []:
+            mk = str(member or "").strip().casefold()
+            if mk:
+                # один остаток семьи на всех членов
+                out[mk] = family_stock
+    _OWN_WH_CACHE = out
+    _OWN_WH_CACHE_UNTIL = now + _OWN_WH_TTL_SEC
+    logger.info("own-wh stock map: %s vendor codes", len(out))
     return dict(out)
