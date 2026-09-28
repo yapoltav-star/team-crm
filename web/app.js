@@ -1293,6 +1293,8 @@ function formatWatchLast(last) {
   }
   if (last.ok === false) {
     const reason = last.error || last.skipped || "ошибка";
+    if (reason === "paused") return "Пропуск: на паузе";
+    if (reason === "disabled") return "Пропуск: выключено в настройках";
     return `Не ок: ${reason}`;
   }
   const created = Array.isArray(last.created) ? last.created.length : Number(last.created || 0);
@@ -1413,13 +1415,22 @@ async function renderAutoTasks() {
   const managers = (data.managers || []).filter((e) => e && e.id);
   const canEditAssignee = canReassignTasks();
   watchBox.innerHTML = "";
-  for (const key of ["stock", "shelf"]) {
-    const w = watches[key];
-    if (!w) continue;
+
+  const addWatchCard = (w, opts) => {
+    const {
+      key,
+      endpoint,
+      field,
+      pauseField,
+      isPick,
+      onOpen,
+    } = opts;
     const card = document.createElement("article");
-    card.className = "auto-watch-card";
-    const endpoint = key === "stock" ? "/api/stock-watch/run" : "/api/shelf-watch/run";
-    const field = key === "stock" ? "stock_assignee_id" : "shelf_assignee_id";
+    card.className = "auto-watch-card" + (isPick || onOpen ? " auto-watch-pick" : "");
+    const paused = !!w.paused;
+    const enabled = !!w.enabled;
+    const statusLabel = !enabled ? "выкл" : paused ? "пауза" : "вкл";
+    const statusClass = !enabled ? "" : paused ? "pause" : "on";
     const assigneeOpts = managers
       .map(
         (e) =>
@@ -1430,18 +1441,51 @@ async function renderAutoTasks() {
           }${e.role === "owner" ? " · владелец" : ""}</option>`
       )
       .join("");
+    const pickCount = Number(
+      w.vendor_count != null
+        ? w.vendor_count
+        : (w.vendor_codes || []).length
+    ) || 0;
+    const exclCount = Number(w.exclude_count || 0);
+    const pickMeta = isPick
+      ? ` · артикулов ${pickCount}`
+      : onOpen && exclCount
+        ? ` · исключено ${exclCount}`
+        : "";
     card.innerHTML = `
       <div class="auto-watch-top">
         <div>
           <h3>${escapeHtml(w.label || key)}</h3>
-          <p class="desc">${w.enabled ? "вкл" : "выкл"} · ${escapeHtml(w.days || "—")} @ ${escapeHtml(w.time || "—")}${
+          <p class="desc"><span class="auto-watch-status ${statusClass}">${statusLabel}</span> · ${escapeHtml(w.days || "—")} @ ${escapeHtml(w.time || "—")}${
             w.min_mine_pct != null ? ` · порог &lt;${escapeHtml(String(w.min_mine_pct))}%` : ""
-          } · кулдаун ${escapeHtml(String(w.cooldown_days ?? "—"))}д</p>
+          } · кулдаун ${escapeHtml(String(w.cooldown_days ?? "—"))}д${pickMeta}</p>
         </div>
-        <button type="button" class="ghost auto-run-btn" data-endpoint="${endpoint}">Запустить сейчас</button>
+        <div class="auto-watch-actions">
+          ${
+            canEditAssignee && enabled
+              ? `<button type="button" class="ghost auto-pause-btn">${
+                  paused ? "Снять паузу" : "На паузу"
+                }</button>`
+              : ""
+          }
+          ${
+            onOpen
+              ? `<button type="button" class="ghost auto-pick-open">Артикулы</button>`
+              : ""
+          }
+          <button type="button" class="ghost auto-run-btn" data-endpoint="${endpoint}">Запустить сейчас</button>
+        </div>
       </div>
       <p class="auto-how">${escapeHtml(w.how_it_works || "")}</p>
-      <div class="auto-assignee-row">
+      ${
+        paused
+          ? `<p class="auto-pause-hint">На паузе: по расписанию задачи не создаются. «Запустить сейчас» всё ещё работает.</p>`
+          : ""
+      }
+      ${
+        isPick
+          ? ""
+          : `<div class="auto-assignee-row">
         <label class="auto-assignee-label">Кому ставить все новые задачи этого типа
           <select class="auto-assignee-select" ${canEditAssignee ? "" : "disabled"}>
             ${assigneeOpts || `<option value="">—</option>`}
@@ -1455,9 +1499,34 @@ async function renderAutoTasks() {
               : ""
         }
       </div>
-      <p class="auto-assignee-hint">Уже созданные задачи не меняются — их можно перекинуть в списке ниже. После сохранения новые автозапуски пойдут выбранному человеку.</p>
+      <p class="auto-assignee-hint">Уже созданные задачи не меняются — их можно перекинуть в списке ниже. После сохранения новые автозапуски пойдут выбранному человеку.${
+        onOpen && !isPick
+          ? " Ненужные артикулы сними в «Артикулы»."
+          : ""
+      }</p>`
+      }
+      ${
+        isPick
+          ? `<p class="auto-assignee-hint">${
+              w.assignee_name
+                ? `Исполнитель: <b>${escapeHtml(w.assignee_name)}</b>. `
+                : "Исполнитель ещё не выбран. "
+            }Кликни карточку или «Артикулы», чтобы выбрать список и человека.</p>`
+          : ""
+      }
       <p class="auto-watch-last">${escapeHtml(formatWatchLast(w.last))}</p>
     `;
+    if (onOpen) {
+      card.style.cursor = "pointer";
+      card.addEventListener("click", (ev) => {
+        if (ev.target.closest("button, select, a, input, label")) return;
+        onOpen();
+      });
+      card.querySelector(".auto-pick-open")?.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        onOpen();
+      });
+    }
     card.querySelector(".auto-run-btn")?.addEventListener("click", async (ev) => {
       ev.stopPropagation();
       const btn = ev.currentTarget;
@@ -1474,6 +1543,36 @@ async function renderAutoTasks() {
         btn.textContent = "Запустить сейчас";
       }
     });
+    const pauseBtn = card.querySelector(".auto-pause-btn");
+    if (pauseBtn) {
+      pauseBtn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        pauseBtn.disabled = true;
+        try {
+          if (isPick) {
+            await api("/api/auto-tasks/stock-pick", {
+              method: "PATCH",
+              body: JSON.stringify({
+                id: w.id,
+                paused: !paused,
+                actor_id: state.meId || null,
+              }),
+            });
+          } else {
+            const payload = { actor_id: state.meId || null };
+            payload[pauseField] = !paused;
+            await api("/api/auto-tasks/pause", {
+              method: "PATCH",
+              body: JSON.stringify(payload),
+            });
+          }
+          await renderAutoTasks();
+        } catch (err) {
+          alert(err.message || String(err));
+          pauseBtn.disabled = false;
+        }
+      });
+    }
     const saveBtn = card.querySelector(".auto-assignee-save");
     const sel = card.querySelector(".auto-assignee-select");
     if (saveBtn && sel) {
@@ -1502,6 +1601,32 @@ async function renderAutoTasks() {
       });
     }
     watchBox.appendChild(card);
+  };
+
+  if (watches.stock) {
+    addWatchCard(watches.stock, {
+      key: "stock",
+      endpoint: "/api/stock-watch/run",
+      field: "stock_assignee_id",
+      pauseField: "stock_paused",
+    });
+  }
+  for (const pick of watches.stock_picks || []) {
+    addWatchCard(pick, {
+      key: pick.id,
+      endpoint: "/api/stock-watch/run",
+      isPick: true,
+      onOpen: () => openStockPickDialog(pick, managers),
+    });
+  }
+  if (watches.shelf) {
+    addWatchCard(watches.shelf, {
+      key: "shelf",
+      endpoint: "/api/shelf-watch/run",
+      field: "shelf_assignee_id",
+      pauseField: "shelf_paused",
+      onOpen: () => openShelfExcludeDialog(watches.shelf),
+    });
   }
 
   const tasks = data.tasks || [];
@@ -1519,6 +1644,301 @@ async function renderAutoTasks() {
   } else {
     for (const t of done.slice(0, 80)) doneList.appendChild(renderAutoTaskCard(t));
   }
+}
+
+let STOCK_PICK_ARTICLES = null;
+let STOCK_PICK_SELECTED = new Set();
+let STOCK_PICK_LOCKED = new Set(); // env excludes — нельзя включить обратно из UI
+
+async function ensureStockPickArticles() {
+  if (Array.isArray(STOCK_PICK_ARTICLES)) return STOCK_PICK_ARTICLES;
+  STOCK_PICK_ARTICLES = await api("/api/articles");
+  return STOCK_PICK_ARTICLES;
+}
+
+function updateStockPickSelectedCount() {
+  const el = $("#stockPickSelectedCount");
+  if (!el) return;
+  const mode = ($("#stockPickMode") && $("#stockPickMode").value) || "stock-pick";
+  if (mode === "shelf-exclude") {
+    const total = (STOCK_PICK_ARTICLES || []).length;
+    const off = total - STOCK_PICK_SELECTED.size;
+    el.textContent = `следим ${STOCK_PICK_SELECTED.size} · снято ${Math.max(0, off)}`;
+  } else {
+    el.textContent = `${STOCK_PICK_SELECTED.size} выбрано`;
+  }
+}
+
+function renderStockPickTable() {
+  const body = $("#stockPickBody");
+  const q = (($("#stockPickSearch") && $("#stockPickSearch").value) || "")
+    .trim()
+    .toLowerCase();
+  if (!body) return;
+  const rows = (STOCK_PICK_ARTICLES || []).filter((a) => {
+    if (!q) return true;
+    return String(a.vendor_code || "")
+      .toLowerCase()
+      .includes(q);
+  });
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="4" class="stock-pick-empty">Ничего не найдено</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows
+    .map((a) => {
+      const vc = String(a.vendor_code || "");
+      const key = vc.toLowerCase();
+      const checked = STOCK_PICK_SELECTED.has(key);
+      const locked = STOCK_PICK_LOCKED.has(key);
+      return `<tr class="${locked ? "stock-pick-locked" : ""}">
+        <td><input type="checkbox" data-vc="${escapeHtml(vc)}" ${checked ? "checked" : ""} ${
+          locked ? "disabled title=\"Жёсткое исключение из настроек сервера\"" : ""
+        } /></td>
+        <td><code>${escapeHtml(vc)}</code>${
+          locked ? ' <span class="chip">фикс</span>' : ""
+        }</td>
+        <td style="text-align:right">${a.stock != null ? Number(a.stock) : "—"}</td>
+        <td style="text-align:right">${a.sales_90d != null ? Number(a.sales_90d) : "—"}</td>
+      </tr>`;
+    })
+    .join("");
+  body.querySelectorAll('input[type="checkbox"][data-vc]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const vc = cb.getAttribute("data-vc") || "";
+      const key = vc.toLowerCase();
+      if (STOCK_PICK_LOCKED.has(key)) {
+        cb.checked = false;
+        return;
+      }
+      if (cb.checked) STOCK_PICK_SELECTED.add(key);
+      else STOCK_PICK_SELECTED.delete(key);
+      updateStockPickSelectedCount();
+    });
+  });
+  updateStockPickSelectedCount();
+}
+
+async function openStockPickDialog(pick, managers) {
+  const dlg = $("#stockPickDlg");
+  if (!dlg) return;
+  const canEdit = canReassignTasks();
+  $("#stockPickMode").value = "stock-pick";
+  $("#stockPickId").value = pick.id || "";
+  $("#stockPickTitle").textContent = pick.label || "Наш склад · по артикулам";
+  const hint = $("#stockPickHint");
+  if (hint) {
+    hint.textContent =
+      "Отметь артикулы — по ним задачи пойдут выбранному человеку. Остальные остаются в общей «Наш склад».";
+  }
+  const wrap = $("#stockPickAssigneeWrap");
+  if (wrap) wrap.style.display = "";
+  const sel = $("#stockPickAssignee");
+  sel.innerHTML = (managers || [])
+    .map(
+      (e) =>
+        `<option value="${e.id}" ${
+          Number(pick.assignee_id) === Number(e.id) ? "selected" : ""
+        }>${escapeHtml(e.name)}${
+          e.job_title ? ` · ${escapeHtml(e.job_title)}` : ""
+        }</option>`
+    )
+    .join("");
+  sel.disabled = !canEdit;
+  $("#stockPickSave").disabled = !canEdit;
+  $("#stockPickDelete").style.display = canEdit ? "" : "none";
+  STOCK_PICK_LOCKED = new Set();
+  STOCK_PICK_SELECTED = new Set(
+    (pick.vendor_codes || []).map((c) => String(c).toLowerCase())
+  );
+  const search = $("#stockPickSearch");
+  if (search) search.value = "";
+  try {
+    await ensureStockPickArticles();
+  } catch (err) {
+    alert(err.message || String(err));
+    return;
+  }
+  window.__stockPickCanon = {};
+  for (const a of STOCK_PICK_ARTICLES || []) {
+    const vc = String(a.vendor_code || "");
+    if (vc) window.__stockPickCanon[vc.toLowerCase()] = vc;
+  }
+  for (const c of pick.vendor_codes || []) {
+    const vc = String(c || "");
+    if (vc) window.__stockPickCanon[vc.toLowerCase()] = vc;
+  }
+  renderStockPickTable();
+  if (!dlg.open) dlg.showModal();
+}
+
+async function openShelfExcludeDialog(shelf) {
+  const dlg = $("#stockPickDlg");
+  if (!dlg) return;
+  const canEdit = canReassignTasks();
+  $("#stockPickMode").value = "shelf-exclude";
+  $("#stockPickId").value = "";
+  $("#stockPickTitle").textContent = "Полки своих · артикулы";
+  const hint = $("#stockPickHint");
+  if (hint) {
+    hint.textContent =
+      "Галочка = следим. Сними с ненужных — по ним «Полка слабая» не создаётся. Поиск сверху.";
+  }
+  const wrap = $("#stockPickAssigneeWrap");
+  if (wrap) wrap.style.display = "none";
+  $("#stockPickSave").disabled = !canEdit;
+  $("#stockPickDelete").style.display = "none";
+  const search = $("#stockPickSearch");
+  if (search) search.value = "";
+
+  const envEx = new Set(
+    (shelf.env_exclude_codes || []).map((c) => String(c).toLowerCase())
+  );
+  const uiEx = new Set(
+    (shelf.exclude_codes || []).map((c) => String(c).toLowerCase())
+  );
+  STOCK_PICK_LOCKED = envEx;
+
+  try {
+    await ensureStockPickArticles();
+  } catch (err) {
+    alert(err.message || String(err));
+    return;
+  }
+  window.__stockPickCanon = {};
+  STOCK_PICK_SELECTED = new Set();
+  for (const a of STOCK_PICK_ARTICLES || []) {
+    const vc = String(a.vendor_code || "");
+    if (!vc) continue;
+    const key = vc.toLowerCase();
+    window.__stockPickCanon[key] = vc;
+    if (!envEx.has(key) && !uiEx.has(key)) STOCK_PICK_SELECTED.add(key);
+  }
+  renderStockPickTable();
+  if (!dlg.open) dlg.showModal();
+}
+
+async function createStockPickRoute() {
+  if (!canReassignTasks()) {
+    alert("Добавлять наборы могут владелец и рук");
+    return;
+  }
+  try {
+    const res = await api("/api/auto-tasks/stock-pick", {
+      method: "PATCH",
+      body: JSON.stringify({
+        create: true,
+        paused: true,
+        label: "Наш склад · по артикулам",
+        actor_id: state.meId || null,
+      }),
+    });
+    await renderAutoTasks();
+    const route = res.route;
+    if (route) {
+      const data = await api(
+        `/api/auto-tasks${state.meId ? `?viewer_id=${state.meId}` : ""}`
+      );
+      openStockPickDialog(route, data.managers || []);
+    }
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+}
+
+function bindStockPickDialog() {
+  const dlg = $("#stockPickDlg");
+  if (!dlg || dlg.dataset.bound) return;
+  dlg.dataset.bound = "1";
+  $("#stockPickClose")?.addEventListener("click", () => dlg.close());
+  $("#stockPickSearch")?.addEventListener("input", () => renderStockPickTable());
+  $("#stockPickCheckAll")?.addEventListener("change", (ev) => {
+    const on = !!ev.target.checked;
+    $("#stockPickBody")
+      ?.querySelectorAll('input[type="checkbox"][data-vc]')
+      .forEach((cb) => {
+        const vc = cb.getAttribute("data-vc") || "";
+        const key = vc.toLowerCase();
+        if (STOCK_PICK_LOCKED.has(key)) {
+          cb.checked = false;
+          STOCK_PICK_SELECTED.delete(key);
+          return;
+        }
+        cb.checked = on;
+        if (on) STOCK_PICK_SELECTED.add(key);
+        else STOCK_PICK_SELECTED.delete(key);
+      });
+    updateStockPickSelectedCount();
+  });
+  $("#stockPickForm")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const mode = ($("#stockPickMode") && $("#stockPickMode").value) || "stock-pick";
+    const btn = $("#stockPickSave");
+    if (btn) btn.disabled = true;
+    try {
+      if (mode === "shelf-exclude") {
+        const exclude = [];
+        for (const a of STOCK_PICK_ARTICLES || []) {
+          const vc = String(a.vendor_code || "");
+          if (!vc) continue;
+          const key = vc.toLowerCase();
+          if (STOCK_PICK_LOCKED.has(key)) continue; // env — уже на сервере
+          if (!STOCK_PICK_SELECTED.has(key)) exclude.push(vc);
+        }
+        await api("/api/auto-tasks/shelf-exclude", {
+          method: "PATCH",
+          body: JSON.stringify({
+            exclude_codes: exclude,
+            actor_id: state.meId || null,
+          }),
+        });
+      } else {
+        const id = $("#stockPickId").value;
+        const assigneeId = Number($("#stockPickAssignee").value);
+        if (!assigneeId) {
+          alert("Выбери исполнителя");
+          return;
+        }
+        const codes = [...STOCK_PICK_SELECTED].map(
+          (k) => (window.__stockPickCanon && window.__stockPickCanon[k]) || k
+        );
+        await api("/api/auto-tasks/stock-pick", {
+          method: "PATCH",
+          body: JSON.stringify({
+            id,
+            assignee_id: assigneeId,
+            vendor_codes: codes,
+            actor_id: state.meId || null,
+          }),
+        });
+      }
+      dlg.close();
+      await renderAutoTasks();
+    } catch (err) {
+      alert(err.message || String(err));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+  $("#stockPickDelete")?.addEventListener("click", async () => {
+    const id = $("#stockPickId").value;
+    if (!id) return;
+    if (!confirm("Удалить этот набор по артикулам?")) return;
+    try {
+      await api("/api/auto-tasks/stock-pick", {
+        method: "PATCH",
+        body: JSON.stringify({
+          id,
+          delete: true,
+          actor_id: state.meId || null,
+        }),
+      });
+      dlg.close();
+      await renderAutoTasks();
+    } catch (err) {
+      alert(err.message || String(err));
+    }
+  });
 }
 
 async function renderArchive() {
@@ -2429,6 +2849,8 @@ $("#archiveMonth")?.addEventListener("change", () => {
 $("#btnAutoRefresh")?.addEventListener("click", () => {
   if (state.view === "auto") renderAutoTasks();
 });
+$("#btnAddStockPick")?.addEventListener("click", () => createStockPickRoute());
+bindStockPickDialog();
 
 $("#dlgDelete").addEventListener("click", async () => {
   const id = Number($("#dlgForm").elements.id.value);

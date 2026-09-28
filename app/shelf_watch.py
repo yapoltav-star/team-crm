@@ -185,11 +185,24 @@ async def run_shelf_watch(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     bot=None,
+    force: bool = False,
 ) -> dict[str, Any]:
     if not settings.shelf_watch_enabled:
         return {"ok": False, "skipped": "disabled"}
     if not settings.wb_dashboard_url:
         return {"ok": False, "error": "WB_DASHBOARD_URL пуст"}
+
+    if not force:
+        async with session_factory() as session:
+            from app.watch_assignees import KEY_SHELF_PAUSED, is_watch_paused
+
+            if await is_watch_paused(session, KEY_SHELF_PAUSED):
+                return {"ok": False, "skipped": "paused"}
+
+    from app.watch_assignees import effective_shelf_exclude_set
+
+    async with session_factory() as session:
+        exclude = await effective_shelf_exclude_set(session, settings)
 
     try:
         weak, meta = await scan_weak_shelves(
@@ -198,7 +211,7 @@ async def run_shelf_watch(
             dest=settings.shelf_dest,
             delay_sec=settings.shelf_request_delay_sec,
             min_orders=settings.shelf_min_orders,
-            exclude_vendor_codes=settings.shelf_exclude_set,
+            exclude_vendor_codes=exclude,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("shelf scan failed")

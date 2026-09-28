@@ -1800,6 +1800,147 @@ body.dlg-open {
   align-items: flex-start;
 }
 
+.auto-watch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.auto-watch-status.on {
+  color: #6ee7b7;
+  font-weight: 600;
+}
+
+.auto-watch-status.pause {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.auto-pause-hint {
+  margin: 0.55rem 0 0;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: #fbbf24;
+}
+
+.auto-section-actions {
+  margin: 0.75rem 0 0.25rem;
+}
+
+.auto-watch-card.auto-watch-pick {
+  border-color: color-mix(in srgb, var(--accent, #7c3aed) 35%, var(--line));
+}
+
+.stock-pick-dlg {
+  width: min(720px, 96vw);
+  max-height: 90vh;
+}
+
+.stock-pick-dlg form {
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+}
+
+.stock-pick-toolbar {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 1.4fr 1fr;
+  padding: 0 1rem;
+}
+
+.stock-pick-toolbar label,
+.stock-pick-search-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.stock-pick-toolbar select,
+.stock-pick-toolbar input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+.stock-pick-hint {
+  margin: 0.75rem 1rem 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.stock-pick-table-wrap {
+  margin: 0.5rem 1rem 0;
+  overflow: auto;
+  flex: 1;
+  min-height: 220px;
+  max-height: 48vh;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.stock-pick-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.stock-pick-table th,
+.stock-pick-table td {
+  padding: 0.45rem 0.65rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.stock-pick-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  z-index: 1;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.stock-pick-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 1.5rem !important;
+}
+
+.stock-pick-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.stock-pick-foot-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.ghost.danger {
+  color: #fca5a5;
+}
+
+.stock-pick-locked {
+  opacity: 0.72;
+}
+
+.stock-pick-toolbar:has(#stockPickAssigneeWrap[style*="display: none"]) {
+  grid-template-columns: 1fr;
+}
+
 .auto-watch-card h3 {
   margin: 0 0 0.25rem;
   font-size: 1.05rem;

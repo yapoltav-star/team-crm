@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-25" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-28" />
 </head>
 <body>
   <header class="top">
@@ -114,11 +114,14 @@
       <div class="tpl-head">
         <div>
           <h1>Автозадачи</h1>
-          <p>Два автомата: склад и полки. В каждом блоке — как это работает и кому ставить новые задачи. Уже созданные можно перекинуть в списке ниже.</p>
+          <p>Склад (общий и по артикулам) и полки. В каждом блоке — как работает и кому ставить. Набор «по артикулам» открывается кликом — там таблица артикулов.</p>
         </div>
         <button type="button" id="btnAutoRefresh" class="ghost">Обновить</button>
       </div>
       <div id="autoWatchCards" class="auto-watch-grid"></div>
+      <div class="auto-section-actions">
+        <button type="button" id="btnAddStockPick" class="ghost">+ Набор по артикулам</button>
+      </div>
       <div class="auto-section-head">
         <h2>Открытые</h2>
         <span id="autoOpenCount" class="chip"></span>
@@ -161,6 +164,48 @@
   </section>
 
   <!-- TASK DRAWER -->
+  <dialog id="stockPickDlg" class="drawer stock-pick-dlg">
+    <form id="stockPickForm">
+      <header class="drawer-head">
+        <div class="drawer-head-main">
+          <h3 id="stockPickTitle">Наш склад · по артикулам</h3>
+        </div>
+        <button type="button" id="stockPickClose" class="ghost">✕</button>
+      </header>
+      <input type="hidden" id="stockPickId" />
+      <input type="hidden" id="stockPickMode" value="stock-pick" />
+      <div class="stock-pick-toolbar">
+        <label id="stockPickAssigneeWrap">Кому ставить задачи по выбранным артикулам
+          <select id="stockPickAssignee"></select>
+        </label>
+        <label class="stock-pick-search-label">Поиск
+          <input id="stockPickSearch" type="search" placeholder="Артикул…" autocomplete="off" />
+        </label>
+      </div>
+      <p class="stock-pick-hint" id="stockPickHint">Отметь артикулы — по ним задачи пойдут выбранному человеку. Остальные остаются в общей «Наш склад».</p>
+      <div class="stock-pick-table-wrap">
+        <table class="stock-pick-table">
+          <thead>
+            <tr>
+              <th style="width:40px"><input type="checkbox" id="stockPickCheckAll" title="Все видимые" /></th>
+              <th>Артикул</th>
+              <th style="width:90px;text-align:right">Склад</th>
+              <th style="width:90px;text-align:right">Продажи 90д</th>
+            </tr>
+          </thead>
+          <tbody id="stockPickBody"></tbody>
+        </table>
+      </div>
+      <footer class="drawer-foot stock-pick-foot">
+        <span id="stockPickSelectedCount" class="chip">0 выбрано</span>
+        <div class="stock-pick-foot-actions">
+          <button type="button" id="stockPickDelete" class="ghost danger">Удалить набор</button>
+          <button type="submit" id="stockPickSave">Сохранить</button>
+        </div>
+      </footer>
+    </form>
+  </dialog>
+
   <dialog id="taskDlg" class="drawer">
     <form id="dlgForm">
       <header class="drawer-head">
@@ -386,6 +431,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-25"></script>
+  <script src="/static/app.js?v=pw-28"></script>
 </body>
 </html>

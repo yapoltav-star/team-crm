@@ -163,11 +163,24 @@ async def run_stock_watch(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     bot=None,
+    force: bool = False,
 ) -> dict[str, Any]:
     if not settings.stock_watch_enabled:
         return {"ok": False, "skipped": "disabled"}
     if not settings.wb_dashboard_url:
         return {"ok": False, "error": "WB_DASHBOARD_URL пуст"}
+
+    from app.stock_pick import load_stock_pick_routes, resolve_stock_route_assignee, route_code_set
+    from app.watch_assignees import KEY_STOCK_PAUSED, is_watch_paused, resolve_stock_assignee
+
+    async with session_factory() as session:
+        default_paused = await is_watch_paused(session, KEY_STOCK_PAUSED)
+        routes = await load_stock_pick_routes(session)
+        active_pick = any(
+            (force or not r.get("paused")) and route_code_set(r) for r in routes
+        )
+        if not force and default_paused and not active_pick:
+            return {"ok": False, "skipped": "paused"}
 
     base = settings.wb_dashboard_url.rstrip("/")
     try:
@@ -187,10 +200,9 @@ async def run_stock_watch(
         require_buyouts=settings.stock_require_buyouts,
         max_family_stock=settings.stock_own_max_stock,
     )
-    top = critical[: max(1, settings.stock_max_tasks)]
 
     created: list[dict[str, Any]] = []
-    skipped_existing = 0
+    skipped_route = 0
 
     async with session_factory() as session:
         owner = await session.scalar(
@@ -205,14 +217,14 @@ async def run_stock_watch(
         if not owner:
             return {"ok": False, "error": "владелец не найден в CRM"}
 
-        from app.watch_assignees import resolve_stock_assignee
-
-        assignee = await resolve_stock_assignee(session, settings, owner)
+        default_assignee = await resolve_stock_assignee(session, settings, owner)
+        default_paused = await is_watch_paused(session, KEY_STOCK_PAUSED)
         logger.info(
-            "stock_watch assignee → %s (id=%s, tg=%s)",
-            assignee.name,
-            assignee.id,
-            assignee.telegram_id,
+            "stock_watch default assignee → %s (id=%s) paused=%s force=%s",
+            default_assignee.name,
+            default_assignee.id,
+            default_paused,
+            force,
         )
 
         existing = await _blocked_markers(
@@ -220,15 +232,31 @@ async def run_stock_watch(
         )
         today = datetime.now(settings.tz).date()
         skipped_cooldown = 0
+        max_n = max(1, settings.stock_max_tasks)
 
-        for sku in top:
+        for sku in critical:
+            if len(created) >= max_n:
+                break
             marker = _marker(sku.family_key)
             if marker in existing:
                 skipped_cooldown += 1
                 continue
 
+            try:
+                assignee, source = await resolve_stock_route_assignee(
+                    session,
+                    sku_vendor=sku.vendor_code,
+                    family=sku.family,
+                    default_assignee=default_assignee,
+                    owner=owner,
+                    default_paused=False if force else default_paused,
+                    ignore_route_pause=force,
+                )
+            except LookupError:
+                skipped_route += 1
+                continue
+
             title = f'Закупить {sku.vendor_code}, на вашем складе кончился'
-            # маркер только для кулдауна, в UI описание не показываем
             desc = _marker(sku.family_key)
             task = Task(
                 title=title[:500],
@@ -248,10 +276,11 @@ async def run_stock_watch(
             await set_assignees(
                 session, task, [assignee.id], actor_id=owner.id, log=True
             )
+            src_label = "набор по артикулам" if source != "stock" else "наш склад"
             await add_event(
                 session,
                 task.id,
-                f"Авто: наш склад — {sku.vendor_code}",
+                f"Авто: {src_label} — {sku.vendor_code} → {assignee.name}",
                 kind="created",
                 actor_id=owner.id,
             )
@@ -281,6 +310,9 @@ async def run_stock_watch(
                     "vendor_code": sku.vendor_code,
                     "family_stock": sku.family_stock,
                     "ordered": sku.ordered,
+                    "assignee_id": assignee.id,
+                    "assignee_name": assignee.name,
+                    "source": source,
                     "notified": notified,
                     "notify_error": nerr,
                 }
@@ -296,9 +328,10 @@ async def run_stock_watch(
                 "Создано:",
             ]
             for row in created[:10]:
+                who = row.get("assignee_name") or "—"
                 lines.append(
                     f"• <code>{row['vendor_code']}</code> — "
-                    f"склад {row['family_stock']} шт, заказы {row['ordered']}"
+                    f"склад {row['family_stock']} шт, заказы {row['ordered']} → {who}"
                 )
             try:
                 await bot.send_message(
@@ -316,5 +349,6 @@ async def run_stock_watch(
         "critical_total": len(critical),
         "created": created,
         "skipped_existing": skipped_cooldown,
+        "skipped_route": skipped_route,
         "cooldown_days": settings.stock_cooldown_days,
     }

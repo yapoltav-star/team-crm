@@ -43,6 +43,9 @@ from app.schemas import (
     TaskPatch,
     TaskReassignIn,
     AutoWatchAssigneesIn,
+    AutoWatchPauseIn,
+    ShelfExcludeIn,
+    StockPickRouteIn,
     TaskThemeIn,
     TaskThemeOut,
     TaskThemePatch,
@@ -1090,10 +1093,14 @@ async def list_auto_tasks(
 
     from app.watch_assignees import (
         KEY_SHELF_ASSIGNEE,
+        KEY_SHELF_PAUSED,
         KEY_STOCK_ASSIGNEE,
+        KEY_STOCK_PAUSED,
         SHELF_HOW_IT_WORKS,
         STOCK_HOW_IT_WORKS,
         get_assignee_id_setting,
+        is_watch_paused,
+        load_shelf_exclude_codes,
         resolve_shelf_assignee,
         resolve_stock_assignee,
     )
@@ -1116,6 +1123,10 @@ async def list_auto_tasks(
     )
     stock_override = await get_assignee_id_setting(session, KEY_STOCK_ASSIGNEE)
     shelf_override = await get_assignee_id_setting(session, KEY_SHELF_ASSIGNEE)
+    stock_paused = await is_watch_paused(session, KEY_STOCK_PAUSED)
+    shelf_paused = await is_watch_paused(session, KEY_SHELF_PAUSED)
+    shelf_ui_excludes = await load_shelf_exclude_codes(session)
+    shelf_env_excludes = sorted(settings.shelf_exclude_set)
 
     managers = (
         await session.scalars(
@@ -1124,6 +1135,19 @@ async def list_auto_tasks(
             .order_by(Employee.name)
         )
     ).all()
+    managers_by_id = {e.id: e for e in managers}
+
+    from app.stock_pick import stock_pick_briefs
+
+    stock_picks = await stock_pick_briefs(
+        session,
+        managers_by_id=managers_by_id,
+        stock_enabled=bool(settings.stock_watch_enabled),
+        stock_days=settings.stock_watch_days,
+        stock_time=settings.stock_watch_time,
+        cooldown_days=settings.stock_cooldown_days,
+    )
+    await session.commit()
 
     def _emp_brief(e: Employee | None) -> dict | None:
         if not e:
@@ -1143,6 +1167,8 @@ async def list_auto_tasks(
                 "label": "Наш склад",
                 "kind": "own-stock",
                 "enabled": bool(settings.stock_watch_enabled),
+                "paused": stock_paused,
+                "active": bool(settings.stock_watch_enabled) and not stock_paused,
                 "days": settings.stock_watch_days,
                 "time": settings.stock_watch_time,
                 "cooldown_days": settings.stock_cooldown_days,
@@ -1156,6 +1182,8 @@ async def list_auto_tasks(
                 "label": "Полки своих",
                 "kind": "my-shelf",
                 "enabled": bool(settings.shelf_watch_enabled),
+                "paused": shelf_paused,
+                "active": bool(settings.shelf_watch_enabled) and not shelf_paused,
                 "days": settings.shelf_watch_days,
                 "time": settings.shelf_watch_time,
                 "cooldown_days": settings.shelf_cooldown_days,
@@ -1165,7 +1193,11 @@ async def list_auto_tasks(
                 "assignee_id": shelf_assignee.id if shelf_assignee else None,
                 "assignee_name": shelf_assignee.name if shelf_assignee else None,
                 "assignee_override": bool(shelf_override),
+                "exclude_codes": shelf_ui_excludes,
+                "env_exclude_codes": shelf_env_excludes,
+                "exclude_count": len(set(shelf_ui_excludes) | set(shelf_env_excludes)),
             },
+            "stock_picks": stock_picks,
         },
     }
 
@@ -1219,9 +1251,126 @@ async def patch_auto_watch_assignees(
     }
 
 
+@router.patch("/auto-tasks/pause")
+async def patch_auto_watch_pause(
+    body: AutoWatchPauseIn,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Поставить на паузу / снять паузу с автозапусков склада и полок."""
+    from app.job_titles import can_reassign_tasks
+    from app.watch_assignees import (
+        KEY_SHELF_PAUSED,
+        KEY_STOCK_PAUSED,
+        is_watch_paused,
+        set_watch_paused,
+    )
+
+    actor: Employee | None = None
+    if body.actor_id is not None:
+        actor = await session.get(Employee, int(body.actor_id))
+    if not actor or not actor.active:
+        raise HTTPException(403, "Нужно войти на сайте")
+    if not can_reassign_tasks(role=actor.role, job_title=actor.job_title):
+        raise HTTPException(403, "Паузу могут ставить владелец и рук")
+
+    if "stock_paused" in body.model_fields_set and body.stock_paused is not None:
+        await set_watch_paused(session, KEY_STOCK_PAUSED, bool(body.stock_paused))
+    if "shelf_paused" in body.model_fields_set and body.shelf_paused is not None:
+        await set_watch_paused(session, KEY_SHELF_PAUSED, bool(body.shelf_paused))
+    await session.commit()
+    return {
+        "ok": True,
+        "stock_paused": await is_watch_paused(session, KEY_STOCK_PAUSED),
+        "shelf_paused": await is_watch_paused(session, KEY_SHELF_PAUSED),
+    }
+
+
+@router.patch("/auto-tasks/stock-pick")
+async def patch_stock_pick_route(
+    body: StockPickRouteIn,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Создать / обновить / удалить набор «Наш склад · по артикулам»."""
+    from app.job_titles import can_reassign_tasks
+    from app.stock_pick import (
+        delete_stock_pick_route,
+        load_stock_pick_routes,
+        upsert_stock_pick_route,
+    )
+
+    actor: Employee | None = None
+    if body.actor_id is not None:
+        actor = await session.get(Employee, int(body.actor_id))
+    if not actor or not actor.active:
+        raise HTTPException(403, "Нужно войти на сайте")
+    if not can_reassign_tasks(role=actor.role, job_title=actor.job_title):
+        raise HTTPException(403, "Наборы артикулов могут менять владелец и рук")
+
+    if body.delete:
+        if not body.id:
+            raise HTTPException(400, "Нужен id набора для удаления")
+        routes = await delete_stock_pick_route(session, str(body.id))
+        await session.commit()
+        return {"ok": True, "routes": routes}
+
+    assignee_id = body.assignee_id
+    if "assignee_id" in body.model_fields_set and assignee_id is not None:
+        assignee_id = int(assignee_id)
+        if assignee_id <= 0:
+            assignee_id = None
+        elif assignee_id:
+            emp = await session.get(Employee, assignee_id)
+            if not emp or not emp.active:
+                raise HTTPException(404, f"Сотрудник #{assignee_id} не найден")
+
+    try:
+        route = await upsert_stock_pick_route(
+            session,
+            route_id=body.id,
+            label=body.label if "label" in body.model_fields_set else None,
+            paused=body.paused if "paused" in body.model_fields_set else None,
+            assignee_id=assignee_id if "assignee_id" in body.model_fields_set else None,
+            vendor_codes=body.vendor_codes
+            if "vendor_codes" in body.model_fields_set
+            else None,
+            create=bool(body.create) or not body.id,
+        )
+    except KeyError:
+        raise HTTPException(404, "Набор не найден") from None
+    await session.commit()
+    routes = await load_stock_pick_routes(session)
+    return {"ok": True, "route": route, "routes": routes}
+
+
+@router.patch("/auto-tasks/shelf-exclude")
+async def patch_shelf_exclude(
+    body: ShelfExcludeIn,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Сохранить список артикулов, которые не проверять в «Полки своих»."""
+    from app.job_titles import can_reassign_tasks
+    from app.watch_assignees import load_shelf_exclude_codes, save_shelf_exclude_codes
+
+    actor: Employee | None = None
+    if body.actor_id is not None:
+        actor = await session.get(Employee, int(body.actor_id))
+    if not actor or not actor.active:
+        raise HTTPException(403, "Нужно войти на сайте")
+    if not can_reassign_tasks(role=actor.role, job_title=actor.job_title):
+        raise HTTPException(403, "Исключения могут менять владелец и рук")
+
+    saved = await save_shelf_exclude_codes(session, body.exclude_codes or [])
+    await session.commit()
+    return {
+        "ok": True,
+        "exclude_codes": saved,
+        "exclude_count": len(await load_shelf_exclude_codes(session)),
+    }
+
+
 @router.post("/stock-watch/run")
 async def stock_watch_run(request: Request) -> dict:
-    """Ручной запуск проверки остатков → автозадачи."""
+    """Ручной запуск проверки остатков → автозадачи (игнорирует паузу)."""
     from app.stock_watch import run_stock_watch
 
     settings = get_settings()
@@ -1230,6 +1379,7 @@ async def stock_watch_run(request: Request) -> dict:
         session_factory=SessionLocal,
         settings=settings,
         bot=bot,
+        force=True,
     )
     request.app.state.last_stock_watch = result
     return result
@@ -1237,7 +1387,7 @@ async def stock_watch_run(request: Request) -> dict:
 
 @router.post("/shelf-watch/run")
 async def shelf_watch_run(request: Request) -> dict:
-    """Ручной запуск проверки полок своих карточек → автозадачи."""
+    """Ручной запуск проверки полок своих карточек → автозадачи (игнорирует паузу)."""
     from app.shelf_watch import run_shelf_watch
 
     settings = get_settings()
@@ -1246,6 +1396,7 @@ async def shelf_watch_run(request: Request) -> dict:
         session_factory=SessionLocal,
         settings=settings,
         bot=bot,
+        force=True,
     )
     request.app.state.last_shelf_watch = result
     return result

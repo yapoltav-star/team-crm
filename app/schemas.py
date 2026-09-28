@@ -176,6 +176,34 @@ class AutoWatchAssigneesIn(BaseModel):
     actor_id: int | None = None
 
 
+class AutoWatchPauseIn(BaseModel):
+    """Пауза автозапусков склада / полок (расписание не создаёт задачи)."""
+
+    stock_paused: bool | None = None
+    shelf_paused: bool | None = None
+    actor_id: int | None = None
+
+
+class StockPickRouteIn(BaseModel):
+    """Создать / обновить набор «Наш склад · по артикулам»."""
+
+    id: str | None = None
+    label: str | None = None
+    paused: bool | None = None
+    assignee_id: int | None = None
+    vendor_codes: list[str] | None = None
+    create: bool = False
+    delete: bool = False
+    actor_id: int | None = None
+
+
+class ShelfExcludeIn(BaseModel):
+    """Какие артикулы не проверять в «Полки своих» (снятые в таблице)."""
+
+    exclude_codes: list[str] = []
+    actor_id: int | None = None
+
+
 class TaskOut(BaseModel):
     id: int
     title: str
