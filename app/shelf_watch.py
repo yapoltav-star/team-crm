@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-import aiohttp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -62,11 +61,15 @@ def shelf_mine_share(items: list[dict[str, Any]], own_nms: set[int]) -> tuple[fl
 
 
 async def fetch_json(url: str) -> Any:
-    timeout = aiohttp.ClientTimeout(total=90)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+    from app.config import get_settings
+    from app.dashboard_client import fetch_dashboard_json
+
+    settings = get_settings()
+    base = (settings.wb_dashboard_url or "").rstrip("/")
+    path = url
+    if base and url.startswith(base):
+        path = url[len(base) :] or "/"
+    return await fetch_dashboard_json(path, settings=settings, timeout_sec=90)
 
 
 async def _blocked_markers(session: AsyncSession, *, cooldown_days: int) -> set[str]:

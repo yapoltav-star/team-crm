@@ -804,7 +804,7 @@ function themeLanes(tasksInCol) {
   // темы из «в работе» и «выполнено» — чтобы пустая колонка всё равно приняла ту же тему
   const usedBoard = new Set(
     (state.board?.tasks || [])
-      .filter((t) => t.status === "doing" || t.status === "done")
+      .filter((t) => t.status === "doing")
       .map((t) => t.theme_id)
       .filter(Boolean)
   );
@@ -937,7 +937,7 @@ function bindDropZone(el, { status, themeId, keepTheme = false }) {
 
     if (status === "todo") {
       body.theme_id = null;
-    } else if (status === "doing" || status === "done") {
+    } else if (status === "doing") {
       let preferred = null;
       if (themeId != null && themeId !== "") preferred = themeId;
       else if (prev && prev.theme_id != null) preferred = prev.theme_id;
@@ -948,7 +948,7 @@ function bindDropZone(el, { status, themeId, keepTheme = false }) {
       });
       if (pick.cancelled) return;
       body.theme_id = pick.themeId;
-    } else if (keepTheme) {
+    } else if (status === "done" || keepTheme) {
       if (prev && prev.theme_id != null) body.theme_id = prev.theme_id;
     } else if (themeId !== undefined) {
       body.theme_id = themeId;
@@ -977,11 +977,16 @@ function renderBoard() {
     const list = tasks.filter((t) => t.status === col.id);
     colEl.innerHTML = `<div class="col-head"><span class="col-badge">${col.title}</span><span class="col-count">${list.length}</span></div>`;
 
-    if (col.id === "todo") {
+    if (col.id === "todo" || col.id === "done") {
       const cards = document.createElement("div");
       cards.className = "cards";
       cards.dataset.status = col.id;
-      bindDropZone(cards, { status: col.id, themeId: null });
+      // todo: без темы; выполнено: тема не важна в колонке, у карточки сохраняем
+      bindDropZone(cards, {
+        status: col.id,
+        themeId: col.id === "todo" ? null : undefined,
+        keepTheme: col.id === "done",
+      });
       for (const t of list) appendCard(cards, t);
       colEl.appendChild(cards);
     } else {
@@ -1654,9 +1659,10 @@ async function renderAutoTasks() {
 let STOCK_PICK_ARTICLES = null;
 let STOCK_PICK_SELECTED = new Set();
 let STOCK_PICK_LOCKED = new Set(); // env excludes — нельзя включить обратно из UI
+let STOCK_PICK_THRESHOLDS = {}; // lowercase vendor_code → number
 
-async function ensureStockPickArticles() {
-  if (Array.isArray(STOCK_PICK_ARTICLES)) return STOCK_PICK_ARTICLES;
+async function ensureStockPickArticles(force = false) {
+  if (!force && Array.isArray(STOCK_PICK_ARTICLES)) return STOCK_PICK_ARTICLES;
   STOCK_PICK_ARTICLES = await api("/api/articles");
   return STOCK_PICK_ARTICLES;
 }
@@ -1676,6 +1682,10 @@ function updateStockPickSelectedCount() {
 
 function renderStockPickTable() {
   const body = $("#stockPickBody");
+  const mode = ($("#stockPickMode") && $("#stockPickMode").value) || "stock-pick";
+  const showThr = mode === "stock-pick";
+  const thrHead = $("#stockPickThrHead");
+  if (thrHead) thrHead.style.display = showThr ? "" : "none";
   const q = (($("#stockPickSearch") && $("#stockPickSearch").value) || "")
     .trim()
     .toLowerCase();
@@ -1687,7 +1697,7 @@ function renderStockPickTable() {
       .includes(q);
   });
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="4" class="stock-pick-empty">Ничего не найдено</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${showThr ? 5 : 4}" class="stock-pick-empty">Ничего не найдено</td></tr>`;
     return;
   }
   body.innerHTML = rows
@@ -1696,6 +1706,16 @@ function renderStockPickTable() {
       const key = vc.toLowerCase();
       const checked = STOCK_PICK_SELECTED.has(key);
       const locked = STOCK_PICK_LOCKED.has(key);
+      const thr =
+        STOCK_PICK_THRESHOLDS[key] != null ? Number(STOCK_PICK_THRESHOLDS[key]) : 0;
+      const thrCell = showThr
+        ? `<td style="text-align:right">
+            <input type="number" class="stock-pick-thr" data-vc="${escapeHtml(vc)}"
+              min="0" step="1" value="${Number.isFinite(thr) ? thr : 0}"
+              ${checked && !locked ? "" : "disabled"}
+              title="Задача, если остаток на складе ≤ этого числа" />
+          </td>`
+        : "";
       return `<tr class="${locked ? "stock-pick-locked" : ""}">
         <td><input type="checkbox" data-vc="${escapeHtml(vc)}" ${checked ? "checked" : ""} ${
           locked ? "disabled title=\"Жёсткое исключение из настроек сервера\"" : ""
@@ -1705,6 +1725,7 @@ function renderStockPickTable() {
         }</td>
         <td style="text-align:right">${a.stock != null ? Number(a.stock) : "—"}</td>
         <td style="text-align:right">${a.sales_90d != null ? Number(a.sales_90d) : "—"}</td>
+        ${thrCell}
       </tr>`;
     })
     .join("");
@@ -1716,9 +1737,30 @@ function renderStockPickTable() {
         cb.checked = false;
         return;
       }
-      if (cb.checked) STOCK_PICK_SELECTED.add(key);
-      else STOCK_PICK_SELECTED.delete(key);
+      if (cb.checked) {
+        STOCK_PICK_SELECTED.add(key);
+        if (STOCK_PICK_THRESHOLDS[key] == null) STOCK_PICK_THRESHOLDS[key] = 0;
+      } else {
+        STOCK_PICK_SELECTED.delete(key);
+      }
+      body.querySelectorAll("input.stock-pick-thr").forEach((thrInp) => {
+        if (thrInp.getAttribute("data-vc") === vc) thrInp.disabled = !cb.checked;
+      });
       updateStockPickSelectedCount();
+    });
+  });
+  body.querySelectorAll("input.stock-pick-thr").forEach((inp) => {
+    const sync = () => {
+      const vc = inp.getAttribute("data-vc") || "";
+      const key = vc.toLowerCase();
+      let n = parseInt(inp.value, 10);
+      if (!Number.isFinite(n) || n < 0) n = 0;
+      STOCK_PICK_THRESHOLDS[key] = n;
+    };
+    inp.addEventListener("input", sync);
+    inp.addEventListener("change", () => {
+      sync();
+      inp.value = String(STOCK_PICK_THRESHOLDS[inp.getAttribute("data-vc")?.toLowerCase() || ""] ?? 0);
     });
   });
   updateStockPickSelectedCount();
@@ -1763,7 +1805,7 @@ async function openStockPickDialog(pick, managers) {
   const hint = $("#stockPickHint");
   if (hint) {
     hint.textContent =
-      "Отметь артикулы — по ним задачи пойдут выбранному человеку. Остальные остаются в общей «Наш склад». Дни/время — общее расписание склада.";
+      "Отметь артикулы и у каждого поставь порог «Порог ≤» — задача придёт, если остаток на складе не больше этого числа. Дни/время — общее расписание склада.";
   }
   const wrap = $("#stockPickAssigneeWrap");
   if (wrap) wrap.style.display = "";
@@ -1785,6 +1827,15 @@ async function openStockPickDialog(pick, managers) {
   STOCK_PICK_SELECTED = new Set(
     (pick.vendor_codes || []).map((c) => String(c).toLowerCase())
   );
+  STOCK_PICK_THRESHOLDS = {};
+  const thrSrc = pick.thresholds || {};
+  for (const [k, v] of Object.entries(thrSrc)) {
+    STOCK_PICK_THRESHOLDS[String(k).toLowerCase()] = Number(v) || 0;
+  }
+  for (const c of pick.vendor_codes || []) {
+    const key = String(c).toLowerCase();
+    if (STOCK_PICK_THRESHOLDS[key] == null) STOCK_PICK_THRESHOLDS[key] = 0;
+  }
   // расписание склада (общее)
   try {
     const data = await api(
@@ -1798,7 +1849,7 @@ async function openStockPickDialog(pick, managers) {
   const search = $("#stockPickSearch");
   if (search) search.value = "";
   try {
-    await ensureStockPickArticles();
+    await ensureStockPickArticles(true);
   } catch (err) {
     alert(err.message || String(err));
     return;
@@ -1845,7 +1896,7 @@ async function openShelfExcludeDialog(shelf) {
   STOCK_PICK_LOCKED = envEx;
 
   try {
-    await ensureStockPickArticles();
+    await ensureStockPickArticles(true);
   } catch (err) {
     alert(err.message || String(err));
     return;
@@ -1910,10 +1961,14 @@ function bindStockPickDialog() {
           return;
         }
         cb.checked = on;
-        if (on) STOCK_PICK_SELECTED.add(key);
-        else STOCK_PICK_SELECTED.delete(key);
+        if (on) {
+          STOCK_PICK_SELECTED.add(key);
+          if (STOCK_PICK_THRESHOLDS[key] == null) STOCK_PICK_THRESHOLDS[key] = 0;
+        } else {
+          STOCK_PICK_SELECTED.delete(key);
+        }
       });
-    updateStockPickSelectedCount();
+    renderStockPickTable();
   });
   $("#stockPickForm")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -1955,6 +2010,11 @@ function bindStockPickDialog() {
         const codes = [...STOCK_PICK_SELECTED].map(
           (k) => (window.__stockPickCanon && window.__stockPickCanon[k]) || k
         );
+        const thresholds = {};
+        for (const k of STOCK_PICK_SELECTED) {
+          const canon = (window.__stockPickCanon && window.__stockPickCanon[k]) || k;
+          thresholds[canon] = Number(STOCK_PICK_THRESHOLDS[k]) || 0;
+        }
         const sched = readStockPickScheduleFields();
         if (!sched.days) {
           alert("Выбери хотя бы один день");
@@ -1966,6 +2026,7 @@ function bindStockPickDialog() {
             id,
             assignee_id: assigneeId,
             vendor_codes: codes,
+            thresholds,
             actor_id: state.meId || null,
           }),
         });
@@ -2274,7 +2335,7 @@ async function setTaskStatusFromDialog(status) {
   const body = { status, actor_id: state.meId || null };
   if (status === "todo") {
     body.theme_id = null;
-  } else if (status === "doing" || status === "done") {
+  } else if (status === "doing") {
     const pick = await pickThemeForMove({
       taskTitle: task?.title || "",
       status,
@@ -2282,6 +2343,8 @@ async function setTaskStatusFromDialog(status) {
     });
     if (pick.cancelled) return;
     body.theme_id = pick.themeId;
+  } else if (status === "done" && task?.theme_id != null) {
+    body.theme_id = task.theme_id;
   }
   await api(`/api/tasks/${id}`, {
     method: "PATCH",

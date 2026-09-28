@@ -378,15 +378,27 @@ async def home(
 @router.get("/articles", response_model=list[ArticleOut])
 async def list_articles(session: AsyncSession = Depends(get_session)) -> list[ArticleOut]:
     rows = await load_catalog(session)
-    return [
-        ArticleOut(
-            vendor_code=a.vendor_code,
-            nm_id=a.nm_id,
-            stock=a.stock,
-            sales_90d=a.sales_90d,
+    # живой остаток «Склад WB РФ» из дашборда; при сбое — seed из справочника
+    live: dict[str, int] = {}
+    try:
+        from app.dashboard_client import fetch_wb_rf_stock_by_vendor
+
+        live = await fetch_wb_rf_stock_by_vendor()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("wb-rf stock enrich failed: %s", exc)
+    out: list[ArticleOut] = []
+    for a in rows:
+        key = str(a.vendor_code or "").casefold()
+        stock = int(live[key]) if key in live else int(a.stock or 0)
+        out.append(
+            ArticleOut(
+                vendor_code=a.vendor_code,
+                nm_id=a.nm_id,
+                stock=stock,
+                sales_90d=a.sales_90d,
+            )
         )
-        for a in rows
-    ]
+    return out
 
 
 @router.post("/projects", response_model=ProjectOut)
@@ -1341,6 +1353,9 @@ async def patch_stock_pick_route(
             assignee_id=assignee_id if "assignee_id" in body.model_fields_set else None,
             vendor_codes=body.vendor_codes
             if "vendor_codes" in body.model_fields_set
+            else None,
+            thresholds=body.thresholds
+            if "thresholds" in body.model_fields_set
             else None,
             create=bool(body.create) or not body.id,
         )

@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-import aiohttp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -123,14 +122,18 @@ def analyze_own_warehouse(
 
 
 async def fetch_json(url: str) -> dict[str, Any]:
-    timeout = aiohttp.ClientTimeout(total=60)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            if not isinstance(data, dict):
-                raise ValueError(f"expected object from {url}")
-            return data
+    from app.dashboard_client import fetch_dashboard_json
+    from app.config import get_settings
+
+    settings = get_settings()
+    base = (settings.wb_dashboard_url or "").rstrip("/")
+    path = url
+    if base and url.startswith(base):
+        path = url[len(base) :] or "/"
+    data = await fetch_dashboard_json(path, settings=settings)
+    if not isinstance(data, dict):
+        raise ValueError(f"expected object from {url}")
+    return data
 
 
 async def _blocked_markers(session: AsyncSession, *, cooldown_days: int) -> set[str]:
@@ -170,7 +173,13 @@ async def run_stock_watch(
     if not settings.wb_dashboard_url:
         return {"ok": False, "error": "WB_DASHBOARD_URL пуст"}
 
-    from app.stock_pick import load_stock_pick_routes, resolve_stock_route_assignee, route_code_set
+    from app.stock_pick import (
+        load_stock_pick_routes,
+        max_threshold_across_routes,
+        resolve_stock_route_assignee,
+        route_code_set,
+        route_threshold_for,
+    )
     from app.watch_assignees import KEY_STOCK_PAUSED, is_watch_paused, resolve_stock_assignee
 
     async with session_factory() as session:
@@ -181,6 +190,7 @@ async def run_stock_watch(
         )
         if not force and default_paused and not active_pick:
             return {"ok": False, "skipped": "paused"}
+        pick_hi = max_threshold_across_routes(routes, ignore_pause=force)
 
     base = settings.wb_dashboard_url.rstrip("/")
     try:
@@ -193,12 +203,14 @@ async def run_stock_watch(
     if own.get("error"):
         return {"ok": False, "error": f"own-warehouse: {own.get('error')}"}
 
+    # берём с запасом по максимальному порогу наборов, дальше режем по каждому артикулу
+    scan_max = max(int(settings.stock_own_max_stock or 0), int(pick_hi or 0))
     critical = analyze_own_warehouse(
         own,
         dash,
         min_orders=settings.stock_min_orders,
         require_buyouts=settings.stock_require_buyouts,
-        max_family_stock=settings.stock_own_max_stock,
+        max_family_stock=scan_max,
     )
 
     created: list[dict[str, Any]] = []
@@ -248,7 +260,7 @@ async def run_stock_watch(
                 continue
 
             try:
-                assignee, source = await resolve_stock_route_assignee(
+                assignee, source, route = await resolve_stock_route_assignee(
                     session,
                     sku_vendor=sku.vendor_code,
                     family=sku.family,
@@ -258,6 +270,14 @@ async def run_stock_watch(
                     ignore_route_pause=force,
                 )
             except LookupError:
+                skipped_route += 1
+                continue
+
+            if source == "stock":
+                thr = int(settings.stock_own_max_stock or 0)
+            else:
+                thr = route_threshold_for(route or {}, sku.vendor_code, sku.family)
+            if sku.family_stock > thr:
                 skipped_route += 1
                 continue
 

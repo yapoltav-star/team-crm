@@ -18,7 +18,8 @@ KEY_STOCK_PICK_ROUTES = "stock_pick_routes"
 
 STOCK_PICK_HOW_IT_WORKS = (
     "Та же проверка остатков на «нашем складе», но только по выбранным артикулам. "
-    "Открой карточку — отметь артикулы в таблице и укажи, кому ставить задачи. "
+    "Открой карточку — отметь артикулы, у каждого укажи порог остатка "
+    "(задача, если на складе ≤ этого числа), и выбери исполнителя. "
     "Можно сделать несколько наборов: одному человеку — одни артикулы, другому — другие. "
     "Артикулы из активного набора не уходят в общую автозадачу «Наш склад». "
     "Новый набор по умолчанию на паузе — пока не снимешь, по расписанию ничего не создаётся."
@@ -45,6 +46,32 @@ def _normalize_codes(codes: list[Any] | None) -> list[str]:
     return out
 
 
+def _normalize_thresholds(
+    codes: list[str],
+    raw: Any,
+) -> dict[str, int]:
+    """vendor_code → порог (задача если остаток семьи ≤ порога). По умолчанию 0."""
+    src: dict[str, Any] = {}
+    if isinstance(raw, dict):
+        src = raw
+    out: dict[str, int] = {}
+    by_fold = {str(k).strip().casefold(): k for k in src.keys()}
+    for vc in codes:
+        key = vc.casefold()
+        val = 0
+        if key in by_fold:
+            try:
+                val = int(float(src[by_fold[key]]))
+            except (TypeError, ValueError):
+                val = 0
+        if val < 0:
+            val = 0
+        if val > 1_000_000:
+            val = 1_000_000
+        out[vc] = val
+    return out
+
+
 def default_stock_pick_route() -> dict[str, Any]:
     return {
         "id": _new_route_id(),
@@ -52,6 +79,7 @@ def default_stock_pick_route() -> dict[str, Any]:
         "paused": True,
         "assignee_id": None,
         "vendor_codes": [],
+        "thresholds": {},
     }
 
 
@@ -69,12 +97,14 @@ def _coerce_route(raw: Any) -> dict[str, Any] | None:
     if assignee_id is not None and assignee_id <= 0:
         assignee_id = None
     codes = _normalize_codes(raw.get("vendor_codes") if isinstance(raw.get("vendor_codes"), list) else [])
+    thresholds = _normalize_thresholds(codes, raw.get("thresholds"))
     return {
         "id": rid,
         "label": label[:120],
         "paused": paused,
         "assignee_id": assignee_id,
         "vendor_codes": codes,
+        "thresholds": thresholds,
     }
 
 
@@ -117,6 +147,7 @@ async def upsert_stock_pick_route(
     paused: bool | None = None,
     assignee_id: int | None = None,
     vendor_codes: list[str] | None = None,
+    thresholds: dict[str, int] | None = None,
     create: bool = False,
 ) -> dict[str, Any]:
     routes = await load_stock_pick_routes(session)
@@ -130,7 +161,11 @@ async def upsert_stock_pick_route(
         if assignee_id is not None:
             target["assignee_id"] = int(assignee_id) if int(assignee_id) > 0 else None
         if vendor_codes is not None:
-            target["vendor_codes"] = _normalize_codes(vendor_codes)
+            codes = _normalize_codes(vendor_codes)
+            target["vendor_codes"] = codes
+            target["thresholds"] = _normalize_thresholds(
+                codes, thresholds if thresholds is not None else {}
+            )
         routes.append(target)
     else:
         for r in routes:
@@ -146,7 +181,17 @@ async def upsert_stock_pick_route(
         if assignee_id is not None:
             target["assignee_id"] = int(assignee_id) if int(assignee_id) > 0 else None
         if vendor_codes is not None:
-            target["vendor_codes"] = _normalize_codes(vendor_codes)
+            codes = _normalize_codes(vendor_codes)
+            target["vendor_codes"] = codes
+            merged = dict(target.get("thresholds") or {})
+            if thresholds is not None:
+                merged.update(thresholds)
+            target["thresholds"] = _normalize_thresholds(codes, merged)
+        elif thresholds is not None:
+            codes = list(target.get("vendor_codes") or [])
+            merged = dict(target.get("thresholds") or {})
+            merged.update(thresholds)
+            target["thresholds"] = _normalize_thresholds(codes, merged)
     await save_stock_pick_routes(session, routes)
     return target
 
@@ -159,6 +204,30 @@ async def delete_stock_pick_route(session: AsyncSession, route_id: str) -> list[
 
 def route_code_set(route: dict[str, Any]) -> set[str]:
     return {str(c).strip().casefold() for c in (route.get("vendor_codes") or []) if str(c).strip()}
+
+
+def route_threshold_for(route: dict[str, Any], sku_vendor: str, family: list[str] | None = None) -> int:
+    """Порог для артикула (или любого из семьи) в наборе. По умолчанию 0."""
+    thr_map = route.get("thresholds") or {}
+    by_fold = {str(k).strip().casefold(): int(v) for k, v in thr_map.items()}
+    for cand in [sku_vendor, *(family or [])]:
+        key = str(cand or "").strip().casefold()
+        if key and key in by_fold:
+            return max(0, by_fold[key])
+    return 0
+
+
+def max_threshold_across_routes(routes: list[dict[str, Any]], *, ignore_pause: bool = False) -> int:
+    hi = 0
+    for route in routes or []:
+        if route.get("paused") and not ignore_pause:
+            continue
+        for v in (route.get("thresholds") or {}).values():
+            try:
+                hi = max(hi, int(v))
+            except (TypeError, ValueError):
+                continue
+    return hi
 
 
 def sku_matches_route(sku_vendor: str, family: list[str] | None, route: dict[str, Any]) -> bool:
@@ -178,11 +247,11 @@ async def resolve_stock_route_assignee(
     owner: Employee,
     default_paused: bool | None = None,
     ignore_route_pause: bool = False,
-) -> tuple[Employee, str]:
+) -> tuple[Employee, str, dict[str, Any] | None]:
     """Кому ставить задачу по SKU.
 
     Сначала активные наборы по артикулам; иначе общая «Наш склад».
-    Возвращает (assignee, source) где source = route_id | 'stock'.
+    Возвращает (assignee, source, route|None) где source = route_id | 'stock'.
     """
     if default_paused is None:
         default_paused = await is_watch_paused(session, KEY_STOCK_PAUSED)
@@ -203,11 +272,11 @@ async def resolve_stock_route_assignee(
                 emp = None
         if emp is None:
             emp = default_assignee if not default_paused else owner
-        return emp, str(route["id"])
+        return emp, str(route["id"]), route
 
     if default_paused:
         raise LookupError("default stock watch paused and no pick route matched")
-    return default_assignee, "stock"
+    return default_assignee, "stock", None
 
 
 async def stock_pick_briefs(
@@ -226,6 +295,7 @@ async def stock_pick_briefs(
         emp = managers_by_id.get(int(aid)) if aid else None
         paused = bool(r.get("paused"))
         codes = list(r.get("vendor_codes") or [])
+        thresholds = dict(r.get("thresholds") or {})
         out.append(
             {
                 "id": r["id"],
@@ -241,6 +311,7 @@ async def stock_pick_briefs(
                 "assignee_id": emp.id if emp else aid,
                 "assignee_name": emp.name if emp else None,
                 "vendor_codes": codes,
+                "thresholds": thresholds,
                 "vendor_count": len(codes),
             }
         )

@@ -192,6 +192,7 @@ class StockPickRouteIn(BaseModel):
     paused: bool | None = None
     assignee_id: int | None = None
     vendor_codes: list[str] | None = None
+    thresholds: dict[str, int] | None = None
     create: bool = False
     delete: bool = False
     actor_id: int | None = None

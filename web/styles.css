@@ -1982,6 +1982,21 @@ body.dlg-open {
   flex-wrap: wrap;
 }
 
+.stock-pick-thr {
+  width: 72px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.25rem 0.35rem;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  text-align: right;
+}
+
+.stock-pick-thr:disabled {
+  opacity: 0.45;
+}
+
 .ghost.danger {
   color: #fca5a5;
 }

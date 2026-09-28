@@ -40,6 +40,8 @@ class Settings(BaseSettings):
         default="https://wb-dashboard-production-baf4.up.railway.app",
         alias="WB_DASHBOARD_URL",
     )
+    # пароль SITE_PASSWORD дашборда (если включён gate) — для API из CRM
+    wb_dashboard_password: str = Field(default="", alias="WB_DASHBOARD_PASSWORD")
     stock_watch_enabled: bool = Field(default=True, alias="STOCK_WATCH_ENABLED")
     # пн,ср,пт — дни проверки (cron day_of_week)
     stock_watch_days: str = Field(default="mon,wed,fri", alias="STOCK_WATCH_DAYS")
@@ -95,6 +97,7 @@ class Settings(BaseSettings):
         "openai_reasoning_effort",
         "openai_transcribe_model",
         "wb_dashboard_url",
+        "wb_dashboard_password",
         "stock_watch_days",
         "stock_watch_time",
         "shelf_watch_days",

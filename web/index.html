@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-29" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-32" />
 </head>
 <body>
   <header class="top">
@@ -200,15 +200,16 @@
           <input id="stockPickComment" type="text" maxlength="500" placeholder="Попадёт в задачу" autocomplete="off" />
         </label>
       </div>
-      <p class="stock-pick-hint" id="stockPickHint">Отметь артикулы — по ним задачи пойдут выбранному человеку. Остальные остаются в общей «Наш склад».</p>
+      <p class="stock-pick-hint" id="stockPickHint">Отметь артикулы и у каждого поставь порог «Порог ≤» — задача придёт, если остаток ≤ порога. Остальные остаются в общей «Наш склад».</p>
       <div class="stock-pick-table-wrap">
         <table class="stock-pick-table">
           <thead>
             <tr>
               <th style="width:40px"><input type="checkbox" id="stockPickCheckAll" title="Все видимые" /></th>
               <th>Артикул</th>
-              <th style="width:90px;text-align:right">Склад</th>
+              <th style="width:90px;text-align:right" title="Живой остаток на «Склад WB РФ» из дашборда">WB РФ</th>
               <th style="width:90px;text-align:right">Продажи 90д</th>
+              <th id="stockPickThrHead" style="width:88px;text-align:right" title="Задача если остаток ≤ порога">Порог ≤</th>
             </tr>
           </thead>
           <tbody id="stockPickBody"></tbody>
@@ -449,6 +450,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-29"></script>
+  <script src="/static/app.js?v=pw-32"></script>
 </body>
 </html>
