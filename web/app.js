@@ -38,6 +38,7 @@ const JOB_TITLES = [
   "партнер",
   "рук",
   "менеджер по китаю",
+  "раздача",
 ];
 
 const JOB_TITLE_ORDER = Object.fromEntries(JOB_TITLES.map((t, i) => [t, i]));

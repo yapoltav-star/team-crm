@@ -9,6 +9,7 @@ JOB_TITLES: tuple[str, ...] = (
     "партнер",
     "рук",
     "менеджер по китаю",
+    "раздача",
 )
 
 JOB_TITLE_SET = frozenset(JOB_TITLES)
