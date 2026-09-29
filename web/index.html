@@ -25,7 +25,7 @@
       background: #191919;
     }
   </style>
-  <link rel="stylesheet" href="/static/styles.css?v=pw-33" />
+  <link rel="stylesheet" href="/static/styles.css?v=pw-34" />
 </head>
 <body>
   <header class="top">
@@ -175,10 +175,10 @@
       <input type="hidden" id="stockPickId" />
       <input type="hidden" id="stockPickMode" value="stock-pick" />
       <div class="stock-pick-toolbar">
-        <label id="stockPickAssigneeWrap">Кому ставить задачи по выбранным артикулам
+        <label id="stockPickAssigneeWrap">Кому ставить задачи
           <select id="stockPickAssignee"></select>
         </label>
-        <label class="stock-pick-search-label">Поиск
+        <label class="stock-pick-search-label" id="stockPickSearchWrap">Поиск
           <input id="stockPickSearch" type="search" placeholder="Артикул…" autocomplete="off" />
         </label>
       </div>
@@ -201,7 +201,7 @@
         </label>
       </div>
       <p class="stock-pick-hint" id="stockPickHint">Отметь артикулы и у каждого поставь порог «Порог ≤» — задача придёт, если остаток ≤ порога. Остальные остаются в общей «Наш склад».</p>
-      <div class="stock-pick-table-wrap">
+      <div class="stock-pick-table-wrap" id="stockPickTableWrap">
         <table class="stock-pick-table">
           <thead>
             <tr>
@@ -451,6 +451,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pw-33"></script>
+  <script src="/static/app.js?v=pw-34"></script>
 </body>
 </html>

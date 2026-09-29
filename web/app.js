@@ -1329,24 +1329,41 @@ function renderAutoTaskCard(t) {
         : t.status === "doing"
           ? "в работе"
           : "новая";
-  const managers =
-    isOpen && canReassignTasks() ? managersForReassign(t) : [];
-  const reassignHtml = managers.length
-    ? `<div class="auto-reassign">
-        <select class="auto-reassign-select" title="Кому перекинуть">
-          <option value="">Перекинуть на…</option>
-          ${managers
-            .map(
-              (e) =>
-                `<option value="${e.id}">${escapeHtml(e.name)}${
-                  e.job_title ? ` · ${escapeHtml(e.job_title)}` : ""
-                }</option>`
-            )
-            .join("")}
-        </select>
-        <button type="button" class="auto-reassign-go">Перекинуть</button>
+  const canEdit = isOpen && canReassignTasks();
+  const peoplePool = canEdit
+    ? prioritizeReassignManagers(
+        people().filter((e) => e.active !== false)
+      )
+    : [];
+  const currentIds = new Set(taskAssigneeIds(t));
+  const editHtml = canEdit
+    ? `<div class="auto-task-edit">
+        <label class="auto-edit-field">Срок
+          <input type="date" class="auto-due-input" value="${escapeHtml(t.due_date || "")}" />
+        </label>
+        <label class="auto-edit-field">Ответственный
+          <select class="auto-assignee-edit">
+            ${peoplePool
+              .map(
+                (e) =>
+                  `<option value="${e.id}" ${
+                    currentIds.has(Number(e.id)) ? "selected" : ""
+                  }>${escapeHtml(e.name)}${
+                    e.job_title ? ` · ${escapeHtml(e.job_title)}` : ""
+                  }</option>`
+              )
+              .join("")}
+          </select>
+        </label>
+        <button type="button" class="auto-task-save">Сохранить</button>
       </div>`
-    : "";
+    : `<div class="meta">
+      <span class="chip ${t.status === "done" || t.archived ? "ok" : ""}">${statusLabel}</span>
+      ${names ? `<span class="chip assignee">${escapeHtml(names)}</span>` : ""}
+      ${t.due_date ? `<span class="chip">до ${escapeHtml(formatDate(t.due_date))}</span>` : ""}
+      ${t.created_at ? `<span class="chip">${escapeHtml(formatDt(t.created_at))}</span>` : ""}
+      ${t.articles ? `<span class="chip project">${escapeHtml(t.articles)}</span>` : ""}
+    </div>`;
   const el = document.createElement("article");
   el.className = "tpl-card";
   el.innerHTML = `
@@ -1354,46 +1371,51 @@ function renderAutoTaskCard(t) {
       <h3>${escapeHtml(t.title)}</h3>
       <span class="chip auto">${escapeHtml(autoKindLabel(kind))}</span>
     </div>
-    <div class="meta">
-      <span class="chip ${t.status === "done" || t.archived ? "ok" : ""}">${statusLabel}</span>
-      ${names ? `<span class="chip assignee">${escapeHtml(names)}</span>` : ""}
-      ${t.due_date ? `<span class="chip">до ${escapeHtml(formatDate(t.due_date))}</span>` : ""}
-      ${t.created_at ? `<span class="chip">${escapeHtml(formatDt(t.created_at))}</span>` : ""}
+    ${
+      canEdit
+        ? `<div class="meta">
+      <span class="chip">${statusLabel}</span>
       ${t.articles ? `<span class="chip project">${escapeHtml(t.articles)}</span>` : ""}
-    </div>
-    ${reassignHtml}
+      ${t.created_at ? `<span class="chip">${escapeHtml(formatDt(t.created_at))}</span>` : ""}
+    </div>`
+        : ""
+    }
+    ${editHtml}
   `;
   el.addEventListener("click", (ev) => {
-    if (ev.target.closest(".auto-reassign")) return;
+    if (ev.target.closest(".auto-task-edit, .auto-reassign")) return;
     openTaskDialog(t.id);
   });
-  const goBtn = el.querySelector(".auto-reassign-go");
-  const sel = el.querySelector(".auto-reassign-select");
-  if (goBtn && sel) {
-    goBtn.addEventListener("click", async (ev) => {
+  const saveBtn = el.querySelector(".auto-task-save");
+  const dueInp = el.querySelector(".auto-due-input");
+  const asgSel = el.querySelector(".auto-assignee-edit");
+  if (saveBtn && dueInp && asgSel) {
+    saveBtn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
-      const empId = Number(sel.value);
+      const empId = Number(asgSel.value);
       if (!empId) {
-        alert("Выбери менеджера");
+        alert("Выбери ответственного");
         return;
       }
-      goBtn.disabled = true;
-      sel.disabled = true;
+      saveBtn.disabled = true;
+      dueInp.disabled = true;
+      asgSel.disabled = true;
       try {
-        await api(`/api/tasks/${t.id}/reassign`, {
-          method: "POST",
+        await api(`/api/tasks/${t.id}`, {
+          method: "PATCH",
           body: JSON.stringify({
-            assignee_id: empId,
+            due_date: dueInp.value || null,
+            assignee_ids: [empId],
             actor_id: state.meId || null,
-            notify: true,
           }),
         });
         await load();
         if (state.view === "auto") await renderAutoTasks();
       } catch (err) {
         alert(err.message || String(err));
-        goBtn.disabled = false;
-        sel.disabled = false;
+        saveBtn.disabled = false;
+        dueInp.disabled = false;
+        asgSel.disabled = false;
       }
     });
   }
@@ -1429,6 +1451,7 @@ async function renderAutoTasks() {
       pauseField,
       isPick,
       onOpen,
+      openLabel,
     } = opts;
     const card = document.createElement("article");
     card.className = "auto-watch-card" + (isPick || onOpen ? " auto-watch-pick" : "");
@@ -1457,6 +1480,7 @@ async function renderAutoTasks() {
       : onOpen && exclCount
         ? ` · исключено ${exclCount}`
         : "";
+    const settingsBtnLabel = openLabel || (isPick ? "Артикулы" : "Настройки");
     card.innerHTML = `
       <div class="auto-watch-top">
         <div>
@@ -1475,7 +1499,7 @@ async function renderAutoTasks() {
           }
           ${
             onOpen
-              ? `<button type="button" class="ghost auto-pick-open">Артикулы</button>`
+              ? `<button type="button" class="ghost auto-pick-open">${escapeHtml(settingsBtnLabel)}</button>`
               : ""
           }
           <button type="button" class="ghost auto-run-btn" data-endpoint="${endpoint}">Запустить сейчас</button>
@@ -1488,8 +1512,14 @@ async function renderAutoTasks() {
           : ""
       }
       ${
-        isPick
-          ? ""
+        onOpen
+          ? `<p class="auto-assignee-hint">${
+              w.assignee_name
+                ? `Исполнитель: <b>${escapeHtml(w.assignee_name)}</b>. `
+                : "Исполнитель ещё не выбран. "
+            }Открой «${escapeHtml(settingsBtnLabel)}» — там дни, время, комментарий, ответственный${
+              isPick || key === "shelf" ? " и артикулы" : ""
+            }.</p>`
           : `<div class="auto-assignee-row">
         <label class="auto-assignee-label">Кому ставить все новые задачи этого типа
           <select class="auto-assignee-select" ${canEditAssignee ? "" : "disabled"}>
@@ -1504,20 +1534,7 @@ async function renderAutoTasks() {
               : ""
         }
       </div>
-      <p class="auto-assignee-hint">Уже созданные задачи не меняются — их можно перекинуть в списке ниже. После сохранения новые автозапуски пойдут выбранному человеку.${
-        onOpen && !isPick
-          ? " Ненужные артикулы сними в «Артикулы»."
-          : ""
-      }</p>`
-      }
-      ${
-        isPick
-          ? `<p class="auto-assignee-hint">${
-              w.assignee_name
-                ? `Исполнитель: <b>${escapeHtml(w.assignee_name)}</b>. `
-                : "Исполнитель ещё не выбран. "
-            }Кликни карточку или «Артикулы», чтобы выбрать список и человека.</p>`
-          : ""
+      <p class="auto-assignee-hint">Уже созданные задачи не меняются — их можно править в списке ниже.</p>`
       }
       ${
         w.comment
@@ -1619,6 +1636,8 @@ async function renderAutoTasks() {
       endpoint: "/api/stock-watch/run",
       field: "stock_assignee_id",
       pauseField: "stock_paused",
+      openLabel: "Настройки",
+      onOpen: () => openStockSettingsDialog(watches.stock, managers),
     });
   }
   for (const pick of watches.stock_picks || []) {
@@ -1626,6 +1645,7 @@ async function renderAutoTasks() {
       key: pick.id,
       endpoint: "/api/stock-watch/run",
       isPick: true,
+      openLabel: "Артикулы",
       onOpen: () => openStockPickDialog(pick, managers),
     });
   }
@@ -1635,7 +1655,8 @@ async function renderAutoTasks() {
       endpoint: "/api/shelf-watch/run",
       field: "shelf_assignee_id",
       pauseField: "shelf_paused",
-      onOpen: () => openShelfExcludeDialog(watches.shelf),
+      openLabel: "Настройки",
+      onOpen: () => openShelfExcludeDialog(watches.shelf, managers),
     });
   }
 
@@ -1660,6 +1681,57 @@ let STOCK_PICK_ARTICLES = null;
 let STOCK_PICK_SELECTED = new Set();
 let STOCK_PICK_LOCKED = new Set(); // env excludes — нельзя включить обратно из UI
 let STOCK_PICK_THRESHOLDS = {}; // lowercase vendor_code → number
+
+function fillStockPickAssigneeSelect(managers, selectedId, { canEdit = true } = {}) {
+  const sel = $("#stockPickAssignee");
+  if (!sel) return;
+  sel.innerHTML = (managers || [])
+    .map(
+      (e) =>
+        `<option value="${e.id}" ${
+          Number(selectedId) === Number(e.id) ? "selected" : ""
+        }>${escapeHtml(e.name)}${
+          e.job_title ? ` · ${escapeHtml(e.job_title)}` : ""
+        }</option>`
+    )
+    .join("");
+  if (!sel.value && managers?.length) sel.value = String(managers[0].id);
+  sel.disabled = !canEdit;
+}
+
+function setStockPickDialogChrome({
+  showAssignee = true,
+  showSearch = true,
+  showTable = true,
+  showDelete = false,
+  canEdit = true,
+  selectedCountText = "",
+} = {}) {
+  const wrap = $("#stockPickAssigneeWrap");
+  if (wrap) wrap.style.display = showAssignee ? "" : "none";
+  const searchWrap = $("#stockPickSearchWrap");
+  if (searchWrap) searchWrap.style.display = showSearch ? "" : "none";
+  const tableWrap = $("#stockPickTableWrap");
+  if (tableWrap) tableWrap.style.display = showTable ? "" : "none";
+  const del = $("#stockPickDelete");
+  if (del) del.style.display = showDelete && canEdit ? "" : "none";
+  const save = $("#stockPickSave");
+  if (save) save.disabled = !canEdit;
+  const count = $("#stockPickSelectedCount");
+  if (count) {
+    count.style.display = showTable ? "" : "none";
+    if (selectedCountText) count.textContent = selectedCountText;
+  }
+  $("#stockPickDays")
+    ?.querySelectorAll("input")
+    .forEach((cb) => {
+      cb.disabled = !canEdit;
+    });
+  const timeEl = $("#stockPickTime");
+  if (timeEl) timeEl.disabled = !canEdit;
+  const commentEl = $("#stockPickComment");
+  if (commentEl) commentEl.disabled = !canEdit;
+}
 
 async function ensureStockPickArticles(force = false) {
   if (!force && Array.isArray(STOCK_PICK_ARTICLES)) return STOCK_PICK_ARTICLES;
@@ -1800,6 +1872,30 @@ function readStockPickScheduleFields() {
   return { days, time, comment };
 }
 
+async function openStockSettingsDialog(stock, managers) {
+  const dlg = $("#stockPickDlg");
+  if (!dlg) return;
+  const canEdit = canReassignTasks();
+  $("#stockPickMode").value = "stock-settings";
+  $("#stockPickId").value = "";
+  $("#stockPickTitle").textContent = stock.label || "Наш склад";
+  const hint = $("#stockPickHint");
+  if (hint) {
+    hint.textContent =
+      "Дни, время, комментарий и ответственный для общей автозадачи «Наш склад». Уже созданные задачи не меняются — правь их в списке ниже.";
+  }
+  fillStockPickAssigneeSelect(managers, stock.assignee_id, { canEdit });
+  setStockPickDialogChrome({
+    showAssignee: true,
+    showSearch: false,
+    showTable: false,
+    showDelete: false,
+    canEdit,
+  });
+  setStockPickScheduleFields(stock.days, stock.time, stock.comment);
+  if (!dlg.open) dlg.showModal();
+}
+
 async function openStockPickDialog(pick, managers) {
   const dlg = $("#stockPickDlg");
   if (!dlg) return;
@@ -1812,22 +1908,14 @@ async function openStockPickDialog(pick, managers) {
     hint.textContent =
       "Отметь артикулы и у каждого поставь порог «Порог ≤» — задача придёт, если на нашем складе остаток ≤ порога. Колонки WB РФ и Наш — живые из дашборда.";
   }
-  const wrap = $("#stockPickAssigneeWrap");
-  if (wrap) wrap.style.display = "";
-  const sel = $("#stockPickAssignee");
-  sel.innerHTML = (managers || [])
-    .map(
-      (e) =>
-        `<option value="${e.id}" ${
-          Number(pick.assignee_id) === Number(e.id) ? "selected" : ""
-        }>${escapeHtml(e.name)}${
-          e.job_title ? ` · ${escapeHtml(e.job_title)}` : ""
-        }</option>`
-    )
-    .join("");
-  sel.disabled = !canEdit;
-  $("#stockPickSave").disabled = !canEdit;
-  $("#stockPickDelete").style.display = canEdit ? "" : "none";
+  fillStockPickAssigneeSelect(managers, pick.assignee_id, { canEdit });
+  setStockPickDialogChrome({
+    showAssignee: true,
+    showSearch: true,
+    showTable: true,
+    showDelete: true,
+    canEdit,
+  });
   STOCK_PICK_LOCKED = new Set();
   STOCK_PICK_SELECTED = new Set(
     (pick.vendor_codes || []).map((c) => String(c).toLowerCase())
@@ -1841,7 +1929,6 @@ async function openStockPickDialog(pick, managers) {
     const key = String(c).toLowerCase();
     if (STOCK_PICK_THRESHOLDS[key] == null) STOCK_PICK_THRESHOLDS[key] = 0;
   }
-  // расписание склада (общее)
   try {
     const data = await api(
       `/api/auto-tasks${state.meId ? `?viewer_id=${state.meId}` : ""}`
@@ -1872,22 +1959,26 @@ async function openStockPickDialog(pick, managers) {
   if (!dlg.open) dlg.showModal();
 }
 
-async function openShelfExcludeDialog(shelf) {
+async function openShelfExcludeDialog(shelf, managers) {
   const dlg = $("#stockPickDlg");
   if (!dlg) return;
   const canEdit = canReassignTasks();
   $("#stockPickMode").value = "shelf-exclude";
   $("#stockPickId").value = "";
-  $("#stockPickTitle").textContent = "Полки своих · артикулы";
+  $("#stockPickTitle").textContent = shelf.label || "Полки своих";
   const hint = $("#stockPickHint");
   if (hint) {
     hint.textContent =
-      "Галочка = следим. Сними с ненужных — по ним «Полка слабая» не создаётся. Дни, время и комментарий — ниже/выше.";
+      "Галочка = следим. Сними с ненужных — по ним «Полка слабая» не создаётся. Здесь же дни, время, комментарий и ответственный.";
   }
-  const wrap = $("#stockPickAssigneeWrap");
-  if (wrap) wrap.style.display = "none";
-  $("#stockPickSave").disabled = !canEdit;
-  $("#stockPickDelete").style.display = "none";
+  fillStockPickAssigneeSelect(managers, shelf.assignee_id, { canEdit });
+  setStockPickDialogChrome({
+    showAssignee: true,
+    showSearch: true,
+    showTable: true,
+    showDelete: false,
+    canEdit,
+  });
   setStockPickScheduleFields(shelf.days, shelf.time, shelf.comment);
   const search = $("#stockPickSearch");
   if (search) search.value = "";
@@ -1981,7 +2072,40 @@ function bindStockPickDialog() {
     const btn = $("#stockPickSave");
     if (btn) btn.disabled = true;
     try {
-      if (mode === "shelf-exclude") {
+      if (mode === "stock-settings") {
+        const assigneeId = Number($("#stockPickAssignee").value);
+        if (!assigneeId) {
+          alert("Выбери исполнителя");
+          return;
+        }
+        const sched = readStockPickScheduleFields();
+        if (!sched.days) {
+          alert("Выбери хотя бы один день");
+          return;
+        }
+        await api("/api/auto-tasks/assignees", {
+          method: "PATCH",
+          body: JSON.stringify({
+            stock_assignee_id: assigneeId,
+            actor_id: state.meId || null,
+          }),
+        });
+        await api("/api/auto-tasks/schedule", {
+          method: "PATCH",
+          body: JSON.stringify({
+            kind: "stock",
+            days: sched.days,
+            time: sched.time,
+            comment: sched.comment,
+            actor_id: state.meId || null,
+          }),
+        });
+      } else if (mode === "shelf-exclude") {
+        const assigneeId = Number($("#stockPickAssignee").value);
+        if (!assigneeId) {
+          alert("Выбери исполнителя");
+          return;
+        }
         const exclude = [];
         for (const a of STOCK_PICK_ARTICLES || []) {
           const vc = String(a.vendor_code || "");
@@ -1995,6 +2119,13 @@ function bindStockPickDialog() {
           alert("Выбери хотя бы один день");
           return;
         }
+        await api("/api/auto-tasks/assignees", {
+          method: "PATCH",
+          body: JSON.stringify({
+            shelf_assignee_id: assigneeId,
+            actor_id: state.meId || null,
+          }),
+        });
         await api("/api/auto-tasks/shelf-exclude", {
           method: "PATCH",
           body: JSON.stringify({

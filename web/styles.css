@@ -2103,6 +2103,50 @@ body.dlg-open {
   flex-wrap: wrap;
 }
 
+.auto-task-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.75rem;
+  align-items: end;
+  margin-top: 0.75rem;
+}
+
+.auto-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  min-width: 140px;
+  flex: 1 1 140px;
+}
+
+.auto-edit-field input,
+.auto-edit-field select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg, var(--card));
+  color: inherit;
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+}
+
+.auto-task-save {
+  border: 0;
+  border-radius: 8px;
+  padding: 0.45rem 0.85rem;
+  background: var(--accent, #2f6fed);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auto-task-save:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .auto-reassign-select {
   flex: 1 1 160px;
   min-width: 140px;
