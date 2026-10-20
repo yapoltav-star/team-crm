@@ -146,6 +146,35 @@ def person_tasks_nudge_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def escalate_ask_when_kb(tasks: list[Task]) -> InlineKeyboardMarkup:
+    """Кнопки в эскалации владельцу: отправить задачу ещё раз с вопросом «когда сделаете»."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for t in tasks[:20]:
+        names = []
+        if t.assignee and t.assignee.name:
+            names.append(t.assignee.name)
+        for link in t.assignees or []:
+            emp = getattr(link, "employee", None)
+            if emp and emp.name and emp.name not in names:
+                names.append(emp.name)
+        who = names[0] if names else "?"
+        title = (t.title or f"#{t.id}").strip()
+        # Telegram: text ≤ ~64 символа удобнее коротким
+        prefix = f"❓ {who}: "
+        room = max(8, 60 - len(prefix))
+        if len(title) > room:
+            title = title[: room - 1] + "…"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{prefix}{title}",
+                    callback_data=f"nudge:{t.id}:0",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def team_people_kb(people: list[Employee]) -> InlineKeyboardMarkup:
     """Кнопки сотрудников — открыть их задачи (напомнить)."""
     rows: list[list[InlineKeyboardButton]] = []
@@ -203,7 +232,7 @@ async def nudge_task_assignee(
         task.status or "todo", task.status or ""
     )
     text = (
-        f"⏳ <b>{actor.name}</b> спрашивает по задаче и ждёт решения\n"
+        f"⏳ <b>{actor.name}</b> спрашивает, когда сделаете эту задачу\n"
         f"<b>#{task.id} {task.title}</b>{sku_line}{due_line}\n"
         f"Сейчас: <i>{status_ru}</i>\n\n"
         "Ответь: «В работе», «Сделано» или «Комментарий»."
@@ -247,7 +276,7 @@ async def nudge_task_assignee(
         await add_event(
             session,
             task.id,
-            f"{actor.name} напомнил(а) и ждёт решения",
+            f"{actor.name} напомнил(а): спрашивает, когда сделаете задачу",
             kind="nudge",
             actor_id=actor.id,
         )

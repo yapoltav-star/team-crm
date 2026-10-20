@@ -652,21 +652,44 @@ async def materialize_and_notify(
                         Task.active.is_(True),
                         Task.notify_time <= hm,
                     )
-                    .options(selectinload(TaskRun.task).selectinload(Task.assignee))
+                    .options(
+                        selectinload(TaskRun.task).selectinload(Task.assignee),
+                        selectinload(TaskRun.task)
+                        .selectinload(Task.assignees)
+                        .selectinload(TaskAssignee.employee),
+                    )
                 )
             ).all()
-            freshly = []
+            freshly_lines: list[str] = []
+            freshly_tasks: list[Task] = []
             for run in pending:
                 run.status = "escalated"
                 run.escalated_at = datetime.utcnow()
-                if run.task and run.task.assignee:
-                    freshly.append(f"• {run.task.assignee.name}: {run.task.title}")
+                task = run.task
+                if not task:
+                    continue
+                names: list[str] = []
+                if task.assignee and task.assignee.name:
+                    names.append(task.assignee.name)
+                for link in task.assignees or []:
+                    emp = getattr(link, "employee", None)
+                    if emp and emp.name and emp.name not in names:
+                        names.append(emp.name)
+                who = ", ".join(names) if names else "без исполнителя"
+                freshly_lines.append(f"• {who}: {task.title}")
+                freshly_tasks.append(task)
             await session.commit()
-            if freshly:
+            if freshly_lines:
+                from app.notify import escalate_ask_when_kb
+
                 try:
                     await bot.send_message(
                         settings.owner_telegram_id,
-                        "⚠️ Не сделали задачи на сегодня:\n\n" + "\n".join(freshly),
+                        "⚠️ Не сделали задачи на сегодня:\n\n"
+                        + "\n".join(freshly_lines)
+                        + "\n\nНажми кнопку — отправлю задачу ещё раз с вопросом "
+                        "«когда сделаете эту задачу».",
+                        reply_markup=escalate_ask_when_kb(freshly_tasks),
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("escalate failed")
@@ -1822,7 +1845,7 @@ def build_dispatcher(
                     try:
                         await callback.message.answer(
                             f"⏳ Напомнил по #{task.id}: <b>{task.title}</b>\n"
-                            f"Сообщил, что ты спрашиваешь и ждёшь решения."
+                            f"Отправил: «{actor.name} спрашивает, когда сделаете эту задачу»."
                             + (f"\n({err})" if err else ""),
                             parse_mode="HTML",
                         )
