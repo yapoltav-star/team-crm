@@ -51,6 +51,7 @@ from app.schemas import (
     TaskThemeOut,
     TaskThemePatch,
     TeamGroupIn,
+    TeamGroupOrderIn,
     TemplateIn,
     TemplateOut,
     AssigneeOut,
@@ -66,6 +67,54 @@ from app.tasks_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+KEY_TEAM_GROUP_ORDER = "team_group_order"
+
+
+async def _load_team_group_order(session: AsyncSession) -> list[str]:
+    from app.watch_assignees import get_setting
+    import json
+
+    raw = (await get_setting(session, KEY_TEAM_GROUP_ORDER)).strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        name = str(item or "").strip()
+        if not name or name in {"Владелец", "Без проекта"}:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(name[:100])
+    return out
+
+
+async def _save_team_group_order(session: AsyncSession, names: list[str]) -> list[str]:
+    from app.watch_assignees import set_setting
+    import json
+
+    clean: list[str] = []
+    seen: set[str] = set()
+    for raw in names:
+        name = str(raw or "").strip()[:100]
+        if not name or name in {"Владелец", "Без проекта"}:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        clean.append(name)
+    await set_setting(session, KEY_TEAM_GROUP_ORDER, json.dumps(clean, ensure_ascii=False))
+    return clean
 router = APIRouter(prefix="/api")
 
 
@@ -280,6 +329,7 @@ async def board(
             employees=emp_outs,
             tasks=[],
             themes=[_theme_out(t) for t in themes],
+            team_group_order=await _load_team_group_order(session),
         )
 
     subject_ids = await _visible_subject_ids(session, viewer)
@@ -319,6 +369,7 @@ async def board(
         employees=emp_outs,
         tasks=[_task_out(t, today=today) for t in tasks],
         themes=[_theme_out(t) for t in themes],
+        team_group_order=await _load_team_group_order(session),
     )
 
 
@@ -533,6 +584,24 @@ async def save_team_group(
             # при создании с тем же именем — синхронизируем состав
             emp.team_group = ""
 
+    order = await _load_team_group_order(session)
+    if old and old != name:
+        order = [name if g == old else g for g in order]
+    if name not in order and member_ids:
+        order.append(name)
+    # убрать пустые проекты из порядка (никого нет)
+    used = {
+        (e.team_group or "").strip()
+        for e in all_emps
+        if (e.team_group or "").strip()
+    }
+    if member_ids:
+        used.add(name)
+    order = [g for g in order if g in used or g == name]
+    if name in used and name not in order:
+        order.append(name)
+    await _save_team_group_order(session, order)
+
     await session.commit()
     refreshed = (
         await session.scalars(
@@ -540,6 +609,20 @@ async def save_team_group(
         )
     ).all()
     return [await _employee_out(session, e) for e in refreshed]
+
+
+@router.patch("/team-groups/order")
+async def patch_team_group_order(
+    body: TeamGroupOrderIn,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Сохранить порядок проектов в левой колонке."""
+    actor = await session.get(Employee, body.actor_id)
+    if not actor or actor.role != "owner":
+        raise HTTPException(403, "Только владелец может менять порядок проектов")
+    order = await _save_team_group_order(session, body.names or [])
+    await session.commit()
+    return {"ok": True, "team_group_order": order}
 
 
 @router.get("/tasks/{task_id}", response_model=TaskOut)

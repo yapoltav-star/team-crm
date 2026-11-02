@@ -270,6 +270,48 @@ button.ghost:hover {
   padding: 0.2rem 0.45rem 0.15rem;
 }
 
+.people-project.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+  background: var(--accent-soft);
+}
+
+.people-project.dragging {
+  opacity: 0.45;
+}
+
+.people-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.55rem;
+  flex-shrink: 0;
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+  font-size: 0.7rem;
+  letter-spacing: -0.08em;
+  border-radius: 6px;
+}
+
+.people-drag-handle:active {
+  cursor: grabbing;
+}
+
+.people-edit-mode .person-draggable {
+  cursor: grab;
+}
+
+.people-edit-mode .person-draggable.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.people-edit-mode .people-project-head {
+  gap: 0.2rem;
+}
+
 .people-group-edit {
   width: 1.55rem;
   height: 1.55rem;

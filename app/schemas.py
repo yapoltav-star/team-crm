@@ -29,6 +29,13 @@ class TeamGroupIn(BaseModel):
     actor_id: int
 
 
+class TeamGroupOrderIn(BaseModel):
+    """Порядок проектов в левой колонке (владелец)."""
+
+    names: list[str]
+    actor_id: int
+
+
 class EmployeeOut(BaseModel):
     id: int
     telegram_id: int
@@ -261,6 +268,7 @@ class BoardOut(BaseModel):
     tasks: list[TaskOut]
     themes: list[TaskThemeOut] = Field(default_factory=list)
     columns: list[str] = Field(default_factory=lambda: ["todo", "doing", "done"])
+    team_group_order: list[str] = Field(default_factory=list)
 
 
 class HomeOut(BaseModel):

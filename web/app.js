@@ -315,6 +315,11 @@ function visiblePeople() {
   return all.filter((e) => allowed.has(e.id));
 }
 
+function teamGroupOrder() {
+  const raw = state.board?.team_group_order;
+  return Array.isArray(raw) ? raw.map((x) => String(x || "").trim()).filter(Boolean) : [];
+}
+
 function peopleTree(list) {
   /** project → role → people */
   const tree = new Map();
@@ -347,12 +352,20 @@ function peopleTree(list) {
       return a[0].localeCompare(b[0], "ru");
     });
 
+  const order = teamGroupOrder();
   return [...tree.entries()]
     .sort((a, b) => {
       if (a[0] === "Владелец") return -1;
       if (b[0] === "Владелец") return 1;
       if (a[0] === "Без проекта") return 1;
       if (b[0] === "Без проекта") return -1;
+      const ai = order.indexOf(a[0]);
+      const bi = order.indexOf(b[0]);
+      if (ai !== -1 || bi !== -1) {
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      }
       return a[0].localeCompare(b[0], "ru");
     })
     .map(([project, roles]) => [project, sortRoles([...roles.entries()])]);
@@ -410,6 +423,7 @@ function renderPersonRow(m, owner) {
     <span class="person-count">${open}</span>
   `;
   main.addEventListener("click", () => {
+    if (state._peopleDragMoved) return;
     state.selectedPersonId = m.id;
     state.selectedProject = String(m.team_group || "").trim() ||
       (m.role === "owner" ? "Владелец" : "Без проекта");
@@ -442,7 +456,80 @@ function renderPersonRow(m, owner) {
     });
     row.appendChild(edit);
   }
+  if (owner && m.role !== "owner") {
+    row.draggable = true;
+    row.classList.add("person-draggable");
+    row.title = (row.title || "") + " Перетащи в другой проект";
+    row.addEventListener("dragstart", (e) => {
+      state._peopleDragMoved = false;
+      e.dataTransfer.setData(
+        "application/x-pw-person",
+        JSON.stringify({ employeeId: m.id })
+      );
+      e.dataTransfer.setData("text/plain", `person:${m.id}`);
+      e.dataTransfer.effectAllowed = "move";
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging");
+      document
+        .querySelectorAll(".people-project.drag-over")
+        .forEach((el) => el.classList.remove("drag-over"));
+      setTimeout(() => {
+        state._peopleDragMoved = false;
+      }, 0);
+    });
+  }
   return row;
+}
+
+async function moveEmployeeToProject(employeeId, projectName) {
+  if (!isOwner() || !state.meId) {
+    alert("Только владелец может переносить людей между проектами");
+    return;
+  }
+  const emp = people().find((e) => Number(e.id) === Number(employeeId));
+  if (!emp || emp.role === "owner") return;
+  const next =
+    projectName === "Без проекта" || projectName === "Владелец"
+      ? ""
+      : String(projectName || "").trim();
+  const current = String(emp.team_group || "").trim();
+  if (current === next) return;
+  await api(`/api/employees/${emp.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      team_group: next,
+      actor_id: state.meId,
+    }),
+  });
+  await load();
+}
+
+async function reorderTeamProjects(dragName, targetName, place) {
+  if (!isOwner() || !state.meId) return;
+  const special = new Set(["Владелец", "Без проекта"]);
+  if (special.has(dragName) || !dragName) return;
+  let names = peopleTree(visiblePeople())
+    .map(([n]) => n)
+    .filter((n) => !special.has(n));
+  // дополним сохранённым порядком (пустые проекты тоже)
+  for (const n of teamGroupOrder()) {
+    if (!special.has(n) && !names.includes(n)) names.push(n);
+  }
+  names = names.filter((n) => n !== dragName);
+  let idx = names.indexOf(targetName);
+  if (targetName && !special.has(targetName) && idx >= 0) {
+    if (place === "after") idx += 1;
+    names.splice(idx, 0, dragName);
+  } else {
+    names.push(dragName);
+  }
+  await api("/api/team-groups/order", {
+    method: "PATCH",
+    body: JSON.stringify({ names, actor_id: state.meId }),
+  });
+  await load();
 }
 
 function renderPeople() {
@@ -458,6 +545,11 @@ function renderPeople() {
     return;
   }
   const owner = isOwner();
+  if (owner) {
+    list.classList.add("people-edit-mode");
+  } else {
+    list.classList.remove("people-edit-mode");
+  }
   for (const [projectName, roles] of peopleTree(all)) {
     const wrap = document.createElement("div");
     wrap.className =
@@ -466,6 +558,7 @@ function renderPeople() {
     const color = projectColor(projectName);
     wrap.style.setProperty("--project-color", color);
     wrap.style.borderLeftColor = color;
+    wrap.dataset.project = projectName;
 
     const head = document.createElement("div");
     head.className = "people-project-head";
@@ -473,12 +566,40 @@ function renderPeople() {
     titleBtn.type = "button";
     titleBtn.className = "people-project-title";
     const memberCount = roles.reduce((n, [, members]) => n + members.length, 0);
+    const canReorder =
+      owner && projectName !== "Без проекта" && projectName !== "Владелец";
     titleBtn.innerHTML = `<span>${escapeHtml(projectName)}</span><span class="people-project-count">${memberCount}</span>`;
     titleBtn.addEventListener("click", () => {
+      if (state._peopleDragMoved) return;
       state.selectedProject = projectName;
       state.selectedPersonId = null;
       renderBoardView();
     });
+    if (canReorder) {
+      const handle = document.createElement("span");
+      handle.className = "people-drag-handle";
+      handle.title = "Перетащи проект вверх/вниз";
+      handle.textContent = "⋮⋮";
+      handle.draggable = true;
+      handle.addEventListener("dragstart", (e) => {
+        e.stopPropagation();
+        state._peopleDragMoved = false;
+        e.dataTransfer.setData(
+          "application/x-pw-project",
+          JSON.stringify({ projectName })
+        );
+        e.dataTransfer.setData("text/plain", `project:${projectName}`);
+        e.dataTransfer.effectAllowed = "move";
+        wrap.classList.add("dragging");
+      });
+      handle.addEventListener("dragend", () => {
+        wrap.classList.remove("dragging");
+        document
+          .querySelectorAll(".people-project.drag-over")
+          .forEach((el) => el.classList.remove("drag-over"));
+      });
+      head.appendChild(handle);
+    }
     head.appendChild(titleBtn);
 
     if (owner && projectName !== "Без проекта" && projectName !== "Владелец") {
@@ -507,6 +628,56 @@ function renderPeople() {
       }
       wrap.appendChild(roleBlock);
     }
+
+    if (owner) {
+      // drop people into project
+      wrap.addEventListener("dragover", (e) => {
+        const types = [...(e.dataTransfer?.types || [])].map(String);
+        const ok =
+          types.includes("application/x-pw-person") ||
+          types.includes("application/x-pw-project") ||
+          types.includes("text/plain");
+        if (!ok) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        wrap.classList.add("drag-over");
+      });
+      wrap.addEventListener("dragleave", () => wrap.classList.remove("drag-over"));
+      wrap.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        wrap.classList.remove("drag-over");
+        state._peopleDragMoved = true;
+        const personRaw = e.dataTransfer.getData("application/x-pw-person");
+        const projectRaw = e.dataTransfer.getData("application/x-pw-project");
+        const plain = e.dataTransfer.getData("text/plain") || "";
+        try {
+          if (personRaw || plain.startsWith("person:")) {
+            if (projectName === "Владелец") {
+              alert("В «Владелец» переносить нельзя");
+              return;
+            }
+            const employeeId = personRaw
+              ? JSON.parse(personRaw).employeeId
+              : Number(plain.slice("person:".length));
+            await moveEmployeeToProject(employeeId, projectName);
+          } else if (projectRaw || plain.startsWith("project:")) {
+            const dragName = projectRaw
+              ? String(JSON.parse(projectRaw).projectName || "")
+              : plain.slice("project:".length);
+            if (!dragName || dragName === projectName) return;
+            if (projectName === "Владелец") return;
+            if (projectName === "Без проекта") {
+              await reorderTeamProjects(dragName, "", "end");
+            } else {
+              await reorderTeamProjects(dragName, projectName, "before");
+            }
+          }
+        } catch (err) {
+          alert(err.message || String(err));
+        }
+      });
+    }
+
     list.appendChild(wrap);
   }
 }
