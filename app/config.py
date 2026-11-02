@@ -96,7 +96,11 @@ class Settings(BaseSettings):
             "04Зарядка Dt X Dt X Mini,"
             "096_бланк_V11_дубль_0,"
             "090_дубль_часы_051_голд_О,"
-            "090_дубль_часы_051_грей_О"
+            "090_дубль_часы_051_грей_О,"
+            "026_X10_black_дубль_O,"
+            "036_GS_Tactix8_black_O,"
+            "031_HK11_Pro_A_grey_O,"
+            "038_HK11Pro _A_grey_4bras_O"
         ),
         alias="SHELF_EXCLUDE_VENDOR_CODES",
     )
