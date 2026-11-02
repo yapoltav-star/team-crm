@@ -71,19 +71,32 @@ class Settings(BaseSettings):
     shelf_request_delay_sec: float = Field(default=0.6, alias="SHELF_REQUEST_DELAY_SEC")
     shelf_assignee_telegram_id: int = Field(default=0, alias="SHELF_ASSIGNEE_TELEGRAM_ID")
     # артикулы, по которым не создавать «Полка слабая» (через запятую)
+    # старые опечатки (_0 / кириллица) оставляем — вдруг совпадут;
+    # рабочие коды с WB: _O и латинские o в «отправки/переходник»
     shelf_exclude_vendor_codes: str = Field(
         default=(
             "06_remeshok_leopard_45_0,"
-            "дляотправкиклиентовремешокпозапросу,"
-            "04_charger_block,"
+            "06_remeshok_leopard_45_O,"
             "06_remeshok_white_45_0,"
+            "06_remeshok_white_45_O,"
+            "06_ремешок_для_отправки_O,"
+            "дляотправкиклиентовремешокпозапросу,"
+            "дляoтправкиклиентoвремешoкпoзапрoсу,"
+            "04_charger_block,"
             "04_ch_переходник,"
-            "096_бланк_V11_дубль_0,"
+            "04_ch_перехoдник,"
+            "04Charger,"
             "04ChargerLK,"
             "04ChargerPodarok,"
             "04ChargerPodarokOceanBlack,"
+            "04ChargerPodarokOceanGrey,"
+            "04Charger_USB_LK_HK,"
+            "04Charger_Type-c_LK_HK,"
+            "04_Charger_для_отправки_клиенту_O,"
             "04Зарядка Dt X Dt X Mini,"
-            "04Charger"
+            "096_бланк_V11_дубль_0,"
+            "090_дубль_часы_051_голд_О,"
+            "090_дубль_часы_051_грей_О"
         ),
         alias="SHELF_EXCLUDE_VENDOR_CODES",
     )
